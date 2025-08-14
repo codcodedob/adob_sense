@@ -1,0 +1,13 @@
+[
+    {
+      "origin": [
+        "http://localhost:3000",
+        "https://adobsense.dmndx.live",
+        "https://www.dmndx.live"
+      ],
+      "method": ["GET", "HEAD"],
+      "responseHeader": ["Content-Type", "Accept", "Origin", "Range"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+  
