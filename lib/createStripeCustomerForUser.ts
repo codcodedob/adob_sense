@@ -3,7 +3,7 @@ import Stripe from "stripe";
 import * as admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, { apiVersion: "2024-06-20" });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, { apiVersion: "2025-07-30.basil" });
 
 if (!admin.apps.length) {
   admin.initializeApp({
