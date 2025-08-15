@@ -1,6 +1,6 @@
 // lib/ensureStripeCustomer.ts (server-only)
 import Stripe from "stripe";
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, { apiVersion: "2024-06-20" });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, { apiVersion: "2025-07-30.basil" });
 
 export async function ensureStripeCustomer(email: string, uid?: string) {
   // search by email to avoid dupes (works if you’ve enabled Search in your account; fallback to list otherwise)
