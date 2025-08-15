@@ -1,7 +1,4 @@
-// ===============================
-// File: pages/api/proxy-audio.ts
-// Description: Robust Node-streaming proxy for audio with Range support and clear errors
-// ===============================
+// pages/api/proxy-audio.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { Readable } from "stream";
 
@@ -18,15 +15,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       res.setHeader("Access-Control-Allow-Headers", "Range, Content-Type");
       return res.status(204).end();
     }
+
     if (req.method !== "GET" && req.method !== "HEAD") {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
     const src = typeof req.query.src === "string" ? req.query.src : "";
-    if (!src) return res.status(400).json({ error: "Missing src" });
+    if (!src) {
+      return res.status(400).json({ error: "Missing src" });
+    }
 
     const headers: Record<string, string> = {};
-    if (req.headers.range) headers["Range"] = String(req.headers.range);
+    if (req.headers.range) {
+      headers["Range"] = String(req.headers.range);
+    }
 
     const upstream = await fetch(src, {
       headers,
@@ -37,13 +39,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!upstream.ok && upstream.status !== 206) {
       const txt = await safeText(upstream);
       console.error("proxy-audio upstream error", upstream.status, txt?.slice(0, 300));
-      res.status(upstream.status).json({ error: "upstream_error", status: upstream.status, body: txt });
+      res
+        .status(upstream.status)
+        .json({ error: "upstream_error", status: upstream.status, body: txt });
       return;
     }
 
     // CORS + cache
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Expose-Headers", "Accept-Ranges, Content-Range, Content-Length, Content-Type");
+    res.setHeader(
+      "Access-Control-Expose-Headers",
+      "Accept-Ranges, Content-Range, Content-Length, Content-Type"
+    );
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.setHeader("Pragma", "no-cache");
 
@@ -68,19 +75,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
-    const nodeStream =
-      typeof (Readable as any).fromWeb === "function"
-        ? (Readable as any).fromWeb(body as any)
-        : (body as any);
+    let nodeStream: Readable;
+
+    // Convert Web ReadableStream to Node Readable
+    if (typeof (Readable as unknown as { fromWeb?: (stream: ReadableStream<Uint8Array>) => Readable }).fromWeb === "function") {
+      nodeStream = (Readable as unknown as { fromWeb: (stream: ReadableStream<Uint8Array>) => Readable }).fromWeb(
+        body as ReadableStream<Uint8Array>
+      );
+    } else {
+      // @ts-expect-error Node.js fetch body may already be a Readable
+      nodeStream = body as unknown as Readable;
+    }
 
     res.status(upstream.status);
     nodeStream.pipe(res);
-  } catch (err: any) {
-    console.error("proxy-audio fatal", err?.stack || err);
+  } catch (err) {
+    const errorObj = err as Error;
+    console.error("proxy-audio fatal", errorObj?.stack || errorObj);
     res.status(500).json({ error: "proxy_failed" });
   }
 }
 
-async function safeText(r: Response) {
-  try { return await r.text(); } catch { return null; }
+async function safeText(r: Response): Promise<string | null> {
+  try {
+    return await r.text();
+  } catch {
+    return null;
+  }
 }
