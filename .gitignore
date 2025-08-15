@@ -78,3 +78,7 @@ next-env.d.ts
 
 .env*
 .history/
+google-cloud-cli-darwin-arm.tar.gz
+google-cloud-sdk/
+.env*
+.history/
