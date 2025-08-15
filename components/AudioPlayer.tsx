@@ -4,20 +4,11 @@ import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 type Reason = "pause" | "change" | "error" | "end";
 
 type AudioPlayerProps = {
-  /** A non-null, playable URL (parent ensures this). */
   src: string;
-  /** Called when playback actually starts (after ready). */
   onPlayStart?: () => void;
-  /** Called once after user has listened for at least 15 seconds. */
   onQualified?: (playedSeconds: number) => void;
-  /**
-   * Called on pause/end/change/error, with the last known played seconds
-   * and a reason.
-   */
   onStop?: (playedSeconds: number, reason?: Reason) => void;
-  /** Called when the track finishes naturally (reaches end). */
   onFinish?: () => void;
-  /** Optional: initial height of the waveform (px). */
   height?: number;
 };
 
@@ -35,13 +26,13 @@ export default function AudioPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const playedRef = useRef(0); // seconds listened (approx, from getCurrentTime)
+  const playedRef = useRef(0);
   const qualifiedSentRef = useRef(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // If replacing an existing track, log stop before tearing it down
+    // Tear down previous instance (and notify parent)
     if (wavesurferRef.current) {
       try {
         onStop?.(Math.floor(playedRef.current), "change");
@@ -50,8 +41,9 @@ export default function AudioPlayer({
       }
       try {
         wavesurferRef.current.destroy();
-      } catch (e: any) {
-        if (e?.name !== "AbortError") {
+      } catch (e: unknown) {
+        const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
+        if (name !== "AbortError") {
           console.warn("wavesurfer destroy warning:", e);
         }
       }
@@ -65,8 +57,8 @@ export default function AudioPlayer({
     const options: WaveSurferOptions = {
       container: containerRef.current,
       height,
-      waveColor: "#cbd5e1", // slate-300
-      progressColor: "#06b6d4", // cyan-500
+      waveColor: "#cbd5e1",
+      progressColor: "#06b6d4",
       barWidth: 2,
       barRadius: 1,
       cursorWidth: 1,
@@ -77,15 +69,12 @@ export default function AudioPlayer({
     wavesurferRef.current = ws;
 
     ws.on("ready", () => {
-      // autostart
       ws.play();
       setIsPlaying(true);
       onPlayStart?.();
     });
 
-    ws.on("play", () => {
-      setIsPlaying(true);
-    });
+    ws.on("play", () => setIsPlaying(true));
 
     ws.on("pause", () => {
       setIsPlaying(false);
@@ -111,22 +100,21 @@ export default function AudioPlayer({
       }
     });
 
-    ws.on("error", (e) => {
+    ws.on("error", (e: unknown) => {
       console.error("WaveSurfer error:", e);
       setErr("Couldn’t load this audio URL.");
       setIsPlaying(false);
       onStop?.(Math.floor(playedRef.current), "error");
     });
 
-    // Begin loading after handlers are attached
     ws.load(src);
 
-    // Cleanup on unmount or when `src` changes
     return () => {
       try {
         ws.destroy();
-      } catch (e: any) {
-        if (e?.name !== "AbortError") {
+      } catch (e: unknown) {
+        const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
+        if (name !== "AbortError") {
           console.warn("wavesurfer destroy warning:", e);
         }
       }

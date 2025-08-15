@@ -1,13 +1,14 @@
 // components/TrialBanner.tsx
 import { useEffect, useMemo, useState } from "react";
-import { doc, onSnapshot, getDoc, setDoc, Timestamp } from "firebase/firestore";
+import Link from "next/link";
+import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, type User } from "firebase/auth";
 import { db } from "../lib/firebaseClient";
 import Countdown from "./Countdown";
-import { startFreeTrial } from "../lib/subscriptions"; // isActive handled locally
+import { startFreeTrial } from "../lib/subscriptions";
 
-// ---------- safe localStorage helpers ----------
-function safeGetItem(key: string): string | null {
+// ----- SSR-safe localStorage helpers -----
+function safeGet(key: string): string | null {
   if (typeof window === "undefined") return null;
   try {
     return window.localStorage.getItem(key);
@@ -15,24 +16,27 @@ function safeGetItem(key: string): string | null {
     return null;
   }
 }
-function safeSetItem(key: string, value: string): void {
+function safeSet(key: string, value: string): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(key, value);
   } catch {
-    /* ignore */
+    // ignore
   }
 }
 
-// ---------- types & guards ----------
-type MaybeTimestamp = Timestamp | Date | string | null | undefined;
+// ----- Minimal Timestamp interface to avoid runtime import -----
+type MinimalTimestamp = { toDate: () => Date };
+
+// ----- Firestore user doc shape used by the banner -----
+type MaybeEndField = string | Date | MinimalTimestamp | null | undefined;
 
 type UserSub = {
-  subscriptionType?: string;
-  subEndIso?: string;            // new canonical ISO
-  subscriptionEndDate?: MaybeTimestamp; // legacy/mobile format or Timestamp
-  trialUsed?: boolean;
-  username?: string;
+  subscriptionType?: string | null;
+  subEndIso?: string | null;               // canonical ISO mirror
+  subscriptionEndDate?: MaybeEndField;     // legacy/mobile or Timestamp
+  trialUsed?: boolean | null;
+  username?: string | null;
 };
 
 const TIER_LABELS: Record<string, string> = {
@@ -43,28 +47,21 @@ const TIER_LABELS: Record<string, string> = {
   DEMANDX: "Demand X",
 };
 
-function isFirestoreTimestamp(v: unknown): v is Timestamp {
-  return !!v && typeof v === "object" && typeof (v as Timestamp).toDate === "function";
+function looksLikeTimestamp(v: unknown): v is MinimalTimestamp {
+  return !!v && typeof v === "object" && typeof (v as MinimalTimestamp).toDate === "function";
 }
 
-function parseEnd(val: MaybeTimestamp): Date | null {
+function parseEnd(val: MaybeEndField): Date | null {
   if (!val) return null;
   if (val instanceof Date) return val;
-  if (isFirestoreTimestamp(val)) return val.toDate();
+  if (looksLikeTimestamp(val)) return val.toDate();
   if (typeof val === "string") {
     const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
+    return Number.isNaN(d.getTime()) ? null : d;
   }
   return null;
 }
 
-function isActive(iso?: string | null): boolean {
-  if (!iso) return false;
-  const d = new Date(iso);
-  return !isNaN(d.getTime()) && d.getTime() > Date.now();
-}
-
-// ---------- component ----------
 export default function TrialBanner() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [userSub, setUserSub] = useState<UserSub | null>(null);
@@ -78,7 +75,7 @@ export default function TrialBanner() {
     return () => off();
   }, []);
 
-  // 2) Subscribe to user doc (seed with localStorage while waiting)
+  // 2) Subscribe to user doc; seed from localStorage for snappy UI
   useEffect(() => {
     if (!authUser) {
       setUserSub(null);
@@ -86,24 +83,25 @@ export default function TrialBanner() {
       return;
     }
     setLoading(true);
+
     const ref = doc(db, "users", authUser.uid);
 
-    const cachedIso = safeGetItem("adob.subEndIso");
-    if (cachedIso) {
-      setUserSub((prev) => ({ ...(prev || {}), subEndIso: cachedIso }));
-    }
+    // optimistic seed
+    const cachedIso = safeGet("adob.subEndIso");
+    if (cachedIso) setUserSub((prev) => ({ ...(prev ?? {}), subEndIso: cachedIso }));
 
     const off = onSnapshot(
       ref,
       (snap) => {
-        const data = (snap.data() as UserSub) || {};
+        const data = (snap.data() as UserSub | undefined) ?? {};
         setUserSub(data);
 
-        // keep cache synced for fast UI on revisits
-        if (data.subEndIso) safeSetItem("adob.subEndIso", data.subEndIso);
-        else if (data.subscriptionEndDate) {
+        // keep cache in sync
+        if (data.subEndIso) {
+          safeSet("adob.subEndIso", data.subEndIso);
+        } else if (data.subscriptionEndDate) {
           const d = parseEnd(data.subscriptionEndDate);
-          if (d) safeSetItem("adob.subEndIso", d.toISOString());
+          if (d) safeSet("adob.subEndIso", d.toISOString());
         }
 
         setLoading(false);
@@ -114,21 +112,20 @@ export default function TrialBanner() {
     return () => off();
   }, [authUser]);
 
-  // 3) Compute best available end date (SSR-safe)
+  // 3) Compute the best available end date
   const endDate = useMemo(() => {
-    // preference: subEndIso -> legacy subscriptionEndDate -> cached
-    const isoFromDoc = userSub?.subEndIso;
+    const iso = userSub?.subEndIso;
     const legacy = userSub?.subscriptionEndDate;
-    const cached = safeGetItem("adob.subEndIso");
-    return parseEnd(isoFromDoc || legacy || cached);
+    const cached = safeGet("adob.subEndIso");
+    return parseEnd(iso || legacy || cached);
   }, [userSub]);
 
   const active = endDate ? endDate.getTime() > Date.now() : false;
-  const type = userSub?.subscriptionType || "HIPSESSION";
-  const label = TIER_LABELS[type] || type;
+  const type = userSub?.subscriptionType ?? "HIPSESSION";
+  const label = TIER_LABELS[type] ?? type;
 
   // 4) Start free trial
-  const handleStartTrial = async () => {
+  const handleStartTrial = async (): Promise<void> => {
     setErr(null);
     const u = getAuth().currentUser;
     if (!u) {
@@ -138,15 +135,15 @@ export default function TrialBanner() {
     try {
       const endIso = await startFreeTrial(u.uid);
       setJustStartedIso(endIso);
-      safeSetItem("adob.subEndIso", endIso);
+      safeSet("adob.subEndIso", endIso);
 
-      // Optimistic reflect in user doc for immediate UI
+      // Optimistic write so UI updates instantly
       await setDoc(
         doc(db, "users", u.uid),
         { subscriptionType: "FREETRIAL", subEndIso: endIso, trialUsed: true, status: "ACTIVE" },
         { merge: true }
       );
-    } catch (e) {
+    } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Could not start trial";
       setErr(msg);
     }
@@ -154,7 +151,7 @@ export default function TrialBanner() {
 
   if (loading) return null;
 
-  // Active paid or trial
+  // Already active (paid or trial)
   if (active && type !== "HIPSESSION") {
     return (
       <div className="mb-4 rounded-xl border bg-white p-3 shadow-sm">
@@ -162,22 +159,19 @@ export default function TrialBanner() {
           <div>
             <p className="text-sm font-semibold">{label} active</p>
             <p className="text-xs text-gray-600">
-              Time left: <Countdown endIso={endDate!.toISOString()} />
+              Time left: {endDate && <Countdown endIso={endDate.toISOString()} />}
             </p>
           </div>
-          <a
-            href="/account"
-            className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
-          >
+          <Link href="/account" className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50">
             Manage
-          </a>
+          </Link>
         </div>
       </div>
     );
   }
 
-  // No active plan
-  const trialUsed = !!userSub?.trialUsed;
+  // No active plan → show trial CTA
+  const trialUsed = Boolean(userSub?.trialUsed);
   return (
     <div className="mb-4 rounded-xl border bg-white p-3 shadow-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -205,12 +199,9 @@ export default function TrialBanner() {
               Start Free Trial
             </button>
           )}
-          <a
-            href="#subscribe"
-            className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
-          >
+          <Link href="#subscribe" className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50">
             See Plans
-          </a>
+          </Link>
         </div>
       </div>
     </div>
