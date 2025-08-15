@@ -6,7 +6,7 @@
 // 4) Upload + Fingerprinting (placeholder UI)
 // 5) Exec Dashboard (temporary views snapshot)
 
-import { useEffect, useState } from "react";
+import {  useState } from "react";
 import TouchSenseAuth from "./TouchSenseAuth";
 
 // Small section shell

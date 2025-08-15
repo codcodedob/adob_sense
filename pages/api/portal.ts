@@ -37,7 +37,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       customerId = customer.id;
 
-      await userRef.set({ stripeCustomerId: customerId, updatedAt: new Date().toISOString() }, { merge: true });
+      await userRef.set(
+        {
+          stripeCustomerId: customerId,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
     }
 
     // 3) Create a Billing Portal session
@@ -47,8 +53,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     return res.status(200).json({ url: session.url });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error(e);
-    return res.status(500).json({ error: e.message || "Stripe error" });
+    if (e instanceof Error) {
+      return res.status(500).json({ error: e.message || "Stripe error" });
+    }
+    return res.status(500).json({ error: "Stripe error" });
   }
 }

@@ -58,8 +58,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Otherwise (e.g. fetch from JS), return the URL in JSON.
     return res.status(200).json({ url: session.url });
-  } catch (e: any) {
-    console.error(e);
-    return res.status(500).json({ error: e.message || "Stripe error" });
+  } catch (e: unknown) {
+    if (e instanceof Error) {
+      console.error(e.message);
+    } else {
+      console.error(String(e));
+    }
   }
+  
 }

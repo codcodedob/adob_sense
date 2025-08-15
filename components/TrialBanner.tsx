@@ -1,27 +1,36 @@
 // components/TrialBanner.tsx
 import { useEffect, useMemo, useState } from "react";
-import { doc, onSnapshot, getDoc, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, getDoc, setDoc, Timestamp } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, type User } from "firebase/auth";
 import { db } from "../lib/firebaseClient";
 import Countdown from "./Countdown";
-import { startFreeTrial, isActive } from "../lib/subscriptions";
+import { startFreeTrial } from "../lib/subscriptions"; // isActive handled locally
 
-// Safe parser for any sub end field we might have
-function parseEnd(val: any): Date | null {
-  if (!val) return null;
-  if (val instanceof Date) return val;
-  if (typeof val === "object" && typeof val.toDate === "function") return val.toDate(); // Firestore Timestamp
-  if (typeof val === "string") {
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
+// ---------- safe localStorage helpers ----------
+function safeGetItem(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
   }
-  return null;
 }
+function safeSetItem(key: string, value: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+// ---------- types & guards ----------
+type MaybeTimestamp = Timestamp | Date | string | null | undefined;
 
 type UserSub = {
   subscriptionType?: string;
-  subEndIso?: string;             // our ISO mirror
-  subscriptionEndDate?: any;      // legacy/mobile string or Timestamp
+  subEndIso?: string;            // new canonical ISO
+  subscriptionEndDate?: MaybeTimestamp; // legacy/mobile format or Timestamp
   trialUsed?: boolean;
   username?: string;
 };
@@ -34,6 +43,28 @@ const TIER_LABELS: Record<string, string> = {
   DEMANDX: "Demand X",
 };
 
+function isFirestoreTimestamp(v: unknown): v is Timestamp {
+  return !!v && typeof v === "object" && typeof (v as Timestamp).toDate === "function";
+}
+
+function parseEnd(val: MaybeTimestamp): Date | null {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  if (isFirestoreTimestamp(val)) return val.toDate();
+  if (typeof val === "string") {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+function isActive(iso?: string | null): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  return !isNaN(d.getTime()) && d.getTime() > Date.now();
+}
+
+// ---------- component ----------
 export default function TrialBanner() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [userSub, setUserSub] = useState<UserSub | null>(null);
@@ -43,13 +74,11 @@ export default function TrialBanner() {
 
   // 1) Auth listener
   useEffect(() => {
-    const off = onAuthStateChanged(getAuth(), (u) => {
-      setAuthUser(u);
-    });
+    const off = onAuthStateChanged(getAuth(), (u) => setAuthUser(u));
     return () => off();
   }, []);
 
-  // 2) Subscribe to user doc (and seed from localStorage while loading)
+  // 2) Subscribe to user doc (seed with localStorage while waiting)
   useEffect(() => {
     if (!authUser) {
       setUserSub(null);
@@ -59,8 +88,7 @@ export default function TrialBanner() {
     setLoading(true);
     const ref = doc(db, "users", authUser.uid);
 
-    // seed from localStorage in case Firestore is slow
-    const cachedIso = localStorage.getItem("adob.subEndIso");
+    const cachedIso = safeGetItem("adob.subEndIso");
     if (cachedIso) {
       setUserSub((prev) => ({ ...(prev || {}), subEndIso: cachedIso }));
     }
@@ -70,51 +98,57 @@ export default function TrialBanner() {
       (snap) => {
         const data = (snap.data() as UserSub) || {};
         setUserSub(data);
-        // keep cache in sync if we have an ISO
-        if (data.subEndIso) localStorage.setItem("adob.subEndIso", data.subEndIso);
+
+        // keep cache synced for fast UI on revisits
+        if (data.subEndIso) safeSetItem("adob.subEndIso", data.subEndIso);
         else if (data.subscriptionEndDate) {
           const d = parseEnd(data.subscriptionEndDate);
-          if (d) localStorage.setItem("adob.subEndIso", d.toISOString());
+          if (d) safeSetItem("adob.subEndIso", d.toISOString());
         }
+
         setLoading(false);
       },
-      (e) => {
-        console.warn("user doc snapshot error", e);
-        setLoading(false);
-      }
+      () => setLoading(false)
     );
+
     return () => off();
   }, [authUser]);
 
-  // 3) Compute best available end date
+  // 3) Compute best available end date (SSR-safe)
   const endDate = useMemo(() => {
-    // Order of preference: subEndIso, subscriptionEndDate, localStorage fallback
-    const iso = userSub?.subEndIso || localStorage.getItem("adob.subEndIso");
+    // preference: subEndIso -> legacy subscriptionEndDate -> cached
+    const isoFromDoc = userSub?.subEndIso;
     const legacy = userSub?.subscriptionEndDate;
-
-    return parseEnd(iso || legacy);
+    const cached = safeGetItem("adob.subEndIso");
+    return parseEnd(isoFromDoc || legacy || cached);
   }, [userSub]);
 
   const active = endDate ? endDate.getTime() > Date.now() : false;
   const type = userSub?.subscriptionType || "HIPSESSION";
   const label = TIER_LABELS[type] || type;
 
-  const startTrial = async () => {
+  // 4) Start free trial
+  const handleStartTrial = async () => {
     setErr(null);
     const u = getAuth().currentUser;
-    if (!u) return alert("Please sign in first.");
+    if (!u) {
+      alert("Please sign in first.");
+      return;
+    }
     try {
       const endIso = await startFreeTrial(u.uid);
       setJustStartedIso(endIso);
-      localStorage.setItem("adob.subEndIso", endIso);
-      // Optimistically reflect in user doc (server is truth; this helps instant UI)
+      safeSetItem("adob.subEndIso", endIso);
+
+      // Optimistic reflect in user doc for immediate UI
       await setDoc(
         doc(db, "users", u.uid),
         { subscriptionType: "FREETRIAL", subEndIso: endIso, trialUsed: true, status: "ACTIVE" },
         { merge: true }
       );
-    } catch (e: any) {
-      setErr(e?.message || "Could not start trial");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not start trial";
+      setErr(msg);
     }
   };
 
@@ -131,7 +165,10 @@ export default function TrialBanner() {
               Time left: <Countdown endIso={endDate!.toISOString()} />
             </p>
           </div>
-          <a href="/account" className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50">
+          <a
+            href="/account"
+            className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
+          >
             Manage
           </a>
         </div>
@@ -158,16 +195,20 @@ export default function TrialBanner() {
             </p>
           )}
         </div>
+
         <div className="flex gap-2">
           {!trialUsed && (
             <button
-              onClick={startTrial}
+              onClick={handleStartTrial}
               className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700"
             >
               Start Free Trial
             </button>
           )}
-          <a href="#subscribe" className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50">
+          <a
+            href="#subscribe"
+            className="rounded-lg border px-3 py-1.5 text-sm hover:bg-gray-50"
+          >
             See Plans
           </a>
         </div>

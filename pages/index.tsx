@@ -321,35 +321,111 @@ function HorizontalRow({
         className="scroll-smooth snap-x snap-mandatory overflow-x-auto focus:outline-none"
       >
         <div className="flex flex-nowrap gap-4 pr-2">
-          {items.map((it: EnterSoundDoc) => {
-            const cover = it.imageUrl || it.imgUrl;
-            const display = it.title || it.id;
-            const isSelected = title.startsWith("Albums") && selectedAlbumId === it.id;
-            return (
-              <div key={it.id} className="flex flex-col items-center">
-                <button
-                  onClick={() => void handleTileClick(it)}
-                  className={`shrink-0 w-40 rounded-lg border bg-white text-left shadow transition snap-start ${
-                    isSelected ? "border-cyan-500 ring-2 ring-cyan-200" : "border-gray-200 hover:border-gray-300 hover:shadow-md"
-                  }`}
-                  title={display}
-                >
-                  <div className="relative h-24 w-40 overflow-hidden rounded-t-lg bg-gray-100">
-                    {cover ? (
-                      <Image src={cover} alt={display} fill className="object-cover" unoptimized />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No cover</div>
-                    )}
-                  </div>
-                  <div className="px-2 py-2">
-                    <p className="truncate text-sm font-medium text-gray-900">{display}</p>
-                    {it.type && <p className="truncate text-xs text-gray-500">{it.type}</p>}
-                  </div>
-                </button>
-                {isSelected && <span className="mt-1 text-xl">⬇</span>}
-              </div>
-            );
-          })}
+        {items.map((it: EnterSoundDoc) => {
+  const cover = it.imageUrl || it.imgUrl;
+  const display = it.title || it.id;
+  const isSelected = title.startsWith("Albums") && selectedAlbumId === it.id;
+
+  // Declare first, then use
+  const isAlbum = title.startsWith("Albums");
+  const trackCount = isAlbum ? (it._soundList?.length ?? 0) : undefined;
+
+  // Only these categories require a playable URL to enable the tile
+  const requiresPlayable =
+    !isAlbum && (title === "Singles" || title === "New Releases" || title === "Ads");
+
+  let playableOK = true;
+  if (requiresPlayable) {
+    const first = it._soundList?.[0] || null;
+    const candidate = getPlayableFromDoc(first);
+    playableOK = !!candidate;
+  }
+
+  const handleClick = () => {
+    if (isAlbum) {
+      // Always drill into album, regardless of audio presence
+      void handleTileClick(it);
+      return;
+    }
+
+    if (!requiresPlayable) {
+      void handleTileClick(it);
+      return;
+    }
+
+    if (!playableOK) return;
+    const first = it._soundList?.[0] || null;
+    const urlRaw = getPlayableFromDoc(first);
+    const url = wrapViaProxy(urlRaw);
+    if (first) {
+      captureTrackMeta({
+        soundId: first.id,
+        enterSoundId: null,
+        artists: first.artists ?? [],
+        duration: first.duration ?? null,
+        sourceUrl: urlRaw ?? undefined,
+      });
+    }
+    playAndReveal(url);
+  };
+
+  const disabled = requiresPlayable && !playableOK;
+
+  return (
+    <div key={it.id} className="flex flex-col items-center">
+      <button
+        onClick={handleClick}
+        disabled={disabled}
+        aria-disabled={disabled}
+        className={[
+          "shrink-0 w-40 rounded-lg border bg-white text-left shadow transition snap-start",
+          isSelected
+            ? "border-cyan-500 ring-2 ring-cyan-200"
+            : "border-gray-200 hover:border-gray-300 hover:shadow-md",
+          disabled
+            ? "opacity-50 cursor-not-allowed hover:border-gray-200 hover:shadow-none"
+            : "",
+        ].join(" ")}
+        title={display}
+      >
+        <div className="relative h-24 w-40 overflow-hidden rounded-t-lg bg-gray-100">
+          {cover ? (
+            <Image src={cover} alt={display} fill className="object-cover" unoptimized />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+              No cover
+            </div>
+          )}
+
+          {isAlbum && (
+            <span
+              className="absolute right-1 top-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold text-white"
+              aria-label={`${trackCount} track${trackCount === 1 ? "" : "s"}`}
+              title={`${trackCount} track${trackCount === 1 ? "" : "s"}`}
+            >
+              {trackCount}
+            </span>
+          )}
+        </div>
+
+        <div className="px-2 py-2">
+          <p className="truncate text-sm font-medium text-gray-900">{display}</p>
+          {it.type && <p className="truncate text-xs text-gray-500">{it.type}</p>}
+          {!isAlbum && disabled && (
+            <p className="mt-1 text-[11px] text-amber-600">No audio available</p>
+          )}
+          {isAlbum && (trackCount ?? 0) === 0 && (
+            <p className="mt-1 text-[11px] text-gray-500">Select to view tracks</p>
+          )}
+        </div>
+      </button>
+      {isSelected && <span className="mt-1 text-xl">⬇</span>}
+    </div>
+  );
+})}
+
+
+
         </div>
       </div>
     </section>

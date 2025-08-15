@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import {
   getAuth,
   onAuthStateChanged,
-  signInAnonymously,
   signOut,
   GoogleAuthProvider,
   signInWithPopup,
@@ -11,67 +10,99 @@ import {
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
   updateProfile,
+  User,
 } from "firebase/auth";
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "An unexpected error occurred";
+  }
+}
 
 export default function TouchSenseAuth() {
   const [uid, setUid] = useState<string | null>(null);
   const [mode, setMode] = useState<"signin" | "signup">("signin");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [displayName, setDisplayName] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    const off = onAuthStateChanged(getAuth(), (u) => setUid(u?.uid ?? null));
+    const off = onAuthStateChanged(getAuth(), (u: User | null) => setUid(u?.uid ?? null));
     return () => off();
   }, []);
 
   const handleSignIn = async () => {
-    setErr(null); setLoading(true);
+    setErr(null);
+    setLoading(true);
     try {
       await signInWithEmailAndPassword(getAuth(), email.trim(), password);
-      setEmail(""); setPassword("");
-    } catch (e: any) { setErr(e?.message || "Sign in failed"); }
-    finally { setLoading(false); }
+      setEmail("");
+      setPassword("");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSignUp = async () => {
-    setErr(null); setLoading(true);
+    setErr(null);
+    setLoading(true);
     try {
       const cred = await createUserWithEmailAndPassword(getAuth(), email.trim(), password);
-      if (displayName.trim()) await updateProfile(cred.user, { displayName: displayName.trim() });
-      setEmail(""); setPassword(""); setDisplayName("");
-    } catch (e: any) { setErr(e?.message || "Sign up failed"); }
-    finally { setLoading(false); }
+      if (displayName.trim()) {
+        await updateProfile(cred.user, { displayName: displayName.trim() });
+      }
+      setEmail("");
+      setPassword("");
+      setDisplayName("");
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleGoogle = async () => {
-    setErr(null); setLoading(true);
-    try { await signInWithPopup(getAuth(), new GoogleAuthProvider()); }
-    catch (e: any) { setErr(e?.message || "Google sign-in failed"); }
-    finally { setLoading(false); }
-  };
-
-  const handleAnon = async () => {
-    setErr(null); setLoading(true);
-    try { await signInAnonymously(getAuth()); }
-    catch (e: any) { setErr(e?.message || "Anonymous sign-in failed"); }
-    finally { setLoading(false); }
+    setErr(null);
+    setLoading(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(getAuth(), provider);
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleReset = async () => {
-    setErr(null); setLoading(true);
-    try { await sendPasswordResetEmail(getAuth(), email.trim()); }
-    catch (e: any) { setErr(e?.message || "Password reset failed"); }
-    finally { setLoading(false); }
+    setErr(null);
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(getAuth(), email.trim());
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSignOut = async () => {
-    setErr(null); setLoading(true);
-    try { await signOut(getAuth()); }
-    catch (e: any) { setErr(e?.message || "Sign out failed"); }
-    finally { setLoading(false); }
+    setErr(null);
+    setLoading(true);
+    try {
+      await signOut(getAuth());
+    } catch (e: unknown) {
+      setErr(getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -113,6 +144,7 @@ export default function TouchSenseAuth() {
             onChange={(e) => setDisplayName(e.target.value)}
           />
         )}
+
         <input
           className="w-full rounded-md border px-3 py-2 text-sm"
           type="email"
@@ -121,13 +153,14 @@ export default function TouchSenseAuth() {
           onChange={(e) => setEmail(e.target.value)}
           autoComplete="email"
         />
+
         <input
           className="w-full rounded-md border px-3 py-2 text-sm"
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={mode === "signin" ? "current-password" : "new-password"}
+          type="password"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete={mode === "signin" ? "current-password" : "new-password"}
         />
 
         {err && <p className="text-sm text-red-600">{err}</p>}
@@ -168,13 +201,9 @@ export default function TouchSenseAuth() {
           >
             Continue with Google
           </button>
-          <button
-            onClick={handleAnon}
-            disabled={loading}
-            className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-60"
-          >
-            Continue anonymously
-          </button>
+
+          {/* Anonymous sign-in intentionally removed per your requirement */}
+          {/* <button ...>Continue anonymously</button> */}
         </div>
       </div>
     </div>

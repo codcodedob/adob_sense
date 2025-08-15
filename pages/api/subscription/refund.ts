@@ -1,52 +1,75 @@
 // pages/api/subscription/refund.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
-import * as admin from "firebase-admin";
+import { adminDb } from "@/lib/firebaseAdmin";
+import { FieldValue } from "firebase-admin/firestore";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, { apiVersion: "2024-06-20" });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2024-06-20",
+});
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_KEY as string)),
-  });
-}
-const db = admin.firestore();
+type RefundBody = {
+  uid: string;
+  /** Amount in cents. If omitted, Stripe issues a full refund of the charge. */
+  amount?: number;
+  /** Optional: specific charge ID to refund. If omitted, refunds the most recent invoice charge. */
+  chargeId?: string;
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
   try {
-    const { uid, amount, chargeId } = req.body as { uid: string; amount?: number; chargeId?: string };
+    const { uid, amount, chargeId } = (req.body || {}) as RefundBody;
     if (!uid) return res.status(400).json({ error: "Missing uid" });
 
-    const user = (await db.collection("users").doc(uid).get()).data();
+    // 1) Load user (for stripeCustomerId)
+    const userSnap = await adminDb.collection("users").doc(uid).get();
+    const user = userSnap.data() as { stripeCustomerId?: string } | undefined;
     if (!user?.stripeCustomerId) return res.status(400).json({ error: "No stripeCustomerId" });
 
-    // If chargeId is provided, refund that; else refund the most recent paid invoice charge
-    let chargeToRefund = chargeId;
+    // 2) Decide which charge to refund
+    let chargeToRefund: string | undefined = chargeId;
+
     if (!chargeToRefund) {
-      const invoices = await stripe.invoices.list({ customer: user.stripeCustomerId, limit: 1 });
+      // Grab most recent invoice and refund its charge (typical for subscription billing)
+      const invoices = await stripe.invoices.list({
+        customer: user.stripeCustomerId,
+        limit: 1,
+      });
+
       const inv = invoices.data[0];
-      if (!inv?.charge) return res.status(400).json({ error: "No recent charge to refund" });
+      if (!inv?.charge) {
+        return res.status(400).json({ error: "No recent charge to refund" });
+      }
       chargeToRefund = String(inv.charge);
     }
 
+    // 3) Normalize amount (cents) if provided
+    const amountCents =
+      typeof amount === "number" && Number.isFinite(amount) ? Math.max(0, Math.floor(amount)) : undefined;
+
+    // 4) Create refund
     const refund = await stripe.refunds.create({
       charge: chargeToRefund,
-      ...(amount ? { amount } : {}), // in cents; omit for full refund
+      ...(typeof amountCents === "number" ? { amount: amountCents } : {}),
       reason: "requested_by_customer",
     });
 
-    await db.collection("users").doc(uid).set(
+    // 5) Persist last refund info on user
+    await adminDb.collection("users").doc(uid).set(
       {
         lastRefundId: refund.id,
         lastRefundAmount: refund.amount,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
 
-    res.status(200).json({ refund });
-  } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ error: e.message || "Refund error" });
+    return res.status(200).json({ refund });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Refund error";
+    console.error("refund.ts error:", err);
+    return res.status(500).json({ error: message });
   }
 }
