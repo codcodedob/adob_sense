@@ -1,8 +1,6 @@
-// lib/firebaseAdmin.ts
 import * as admin from "firebase-admin";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __FIREBASE_ADMIN_APP__: admin.app.App | undefined;
 }
 
