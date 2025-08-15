@@ -4,10 +4,7 @@ import { Readable } from "node:stream";
 import Stripe from "stripe";
 import { adminDb } from "@/lib/firebaseAdmin";
 
-// 1) Next must receive the raw body for webhook signature verification
-export const config = {
-  api: { bodyParser: false },
-};
+export const config = { api: { bodyParser: false } };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2024-06-20",
@@ -15,28 +12,24 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
 
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET as string;
 
-// ---- Helpers --------------------------------------------------------------
+// --- Helpers ---------------------------------------------------------------
 
-/** Read raw body for stripe.signature validation */
 async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   const chunks: Buffer[] = [];
   const stream = req as unknown as Readable;
   for await (const chunk of stream) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
   }
   return Buffer.concat(chunks);
 }
 
-// Map Stripe price IDs -> internal tier names you use in UI/Firestore
 const PRICE_TO_TIER: Record<string, "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX"> = {
   [process.env.NEXT_PUBLIC_STRIPE_PRICE_ADOBSENSE as string]: "ADOB_SENSE",
-  [process.env.NEXT_PUBLIC_STRIPE_PRICE_DOBEONE as string]:   "DOBE_ONE",
-  [process.env.NEXT_PUBLIC_STRIPE_PRICE_DEMANDX as string]:   "DEMANDX",
+  [process.env.NEXT_PUBLIC_STRIPE_PRICE_DOBEONE as string]: "DOBE_ONE",
+  [process.env.NEXT_PUBLIC_STRIPE_PRICE_DEMANDX as string]: "DEMANDX",
 };
 
-/** Resolve user doc ref for a given Stripe customer ID */
 async function getUserRefForCustomer(customerId: string) {
-  // primary lookup: users where stripeCustomerId == customerId
   const q = await adminDb
     .collection("users")
     .where("stripeCustomerId", "==", customerId)
@@ -45,24 +38,14 @@ async function getUserRefForCustomer(customerId: string) {
 
   if (!q.empty) return q.docs[0].ref;
 
-  // fallback: try customer.metadata.uid if present
   const customer = await stripe.customers.retrieve(customerId);
   if (customer && typeof customer !== "string" && customer.metadata?.uid) {
     return adminDb.collection("users").doc(customer.metadata.uid);
   }
-
   return null;
 }
 
-/** Set plan + end date (+ status) for user */
-async function setUserSubscription({
-  userRef,
-  tier,
-  currentPeriodEnd, // unix seconds
-  status,           // 'active' | 'trialing' | 'canceled' | 'past_due' | etc.
-  stripeCustomerId,
-  subscriptionId,
-}: {
+async function setUserSubscription(opts: {
   userRef: FirebaseFirestore.DocumentReference;
   tier: "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX";
   currentPeriodEnd: number | null;
@@ -70,9 +53,10 @@ async function setUserSubscription({
   stripeCustomerId?: string;
   subscriptionId?: string;
 }) {
+  const { userRef, tier, currentPeriodEnd, status, stripeCustomerId, subscriptionId } = opts;
   await userRef.set(
     {
-      subscriptionType: tier, // <- this is what your UI checks
+      subscriptionType: tier,
       subscriptionStatus: status,
       subscriptionEndDate: currentPeriodEnd ? new Date(currentPeriodEnd * 1000) : null,
       stripeCustomerId: stripeCustomerId ?? null,
@@ -83,17 +67,14 @@ async function setUserSubscription({
   );
 }
 
-/** Downgrade to free (HIPSESSION) */
-async function setUserToFree({
-  userRef,
-  reason,
-}: {
+async function setUserToFree(opts: {
   userRef: FirebaseFirestore.DocumentReference;
   reason: string;
 }) {
+  const { userRef, reason } = opts;
   await userRef.set(
     {
-      subscriptionType: "HIPSESSION", // your free tier label
+      subscriptionType: "HIPSESSION",
       subscriptionStatus: "canceled",
       subscriptionEndDate: null,
       updatedAt: Date.now(),
@@ -103,7 +84,6 @@ async function setUserToFree({
   );
 }
 
-/** Idempotency: store processed event IDs */
 async function alreadyProcessed(eventId: string) {
   const ref = adminDb.collection("_stripe_events").doc(eventId);
   const snap = await ref.get();
@@ -112,49 +92,41 @@ async function alreadyProcessed(eventId: string) {
   return false;
 }
 
-// ---- Handler --------------------------------------------------------------
+// --- Handler ---------------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const raw = await readRawBody(req);
     const signature = req.headers["stripe-signature"] as string;
-    let event: Stripe.Event;
 
+    let event: Stripe.Event;
     try {
       event = stripe.webhooks.constructEvent(raw, signature, WEBHOOK_SECRET);
-    } catch (err: any) {
-      console.error("⚠️  Webhook signature verification failed", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("⚠️  Webhook signature verification failed", msg);
+      return res.status(400).send(`Webhook Error: ${msg}`);
     }
 
-    // ensure idempotency
     if (await alreadyProcessed(event.id)) {
       return res.status(200).json({ received: true, duplicate: true });
     }
 
     switch (event.type) {
-      // 1) Checkout completed – set plan immediately
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-
         const customerId = session.customer as string;
         const subId = session.subscription as string | null;
-        const line = session.line_items?.data?.[0]; // only if expanded, usually not
-        // We'll fetch the subscription to get price + period end.
+
         let sub: Stripe.Subscription | null = null;
-        if (subId) {
-          sub = await stripe.subscriptions.retrieve(subId);
-        }
+        if (subId) sub = await stripe.subscriptions.retrieve(subId);
 
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
 
-        // Choose tier using the subscription's default price:
         let tier: "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX" | null = null;
-        if (sub?.items?.data?.[0]?.price?.id) {
-          const priceId = sub.items.data[0].price.id;
-          tier = PRICE_TO_TIER[priceId] ?? null;
-        }
+        const priceId = sub?.items?.data?.[0]?.price?.id;
+        if (priceId) tier = PRICE_TO_TIER[priceId] ?? null;
 
         const end = sub?.current_period_end ?? null;
         const status = sub?.status ?? "active";
@@ -169,12 +141,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             subscriptionId: sub?.id,
           });
         } else {
-          // We couldn't map tier; still remember stripe ids
           await userRef.set(
             {
               stripeCustomerId: customerId,
               stripeSubscriptionId: sub?.id ?? null,
-              subscriptionStatus: sub?.status ?? "active",
+              subscriptionStatus: status,
               subscriptionEndDate: end ? new Date(end * 1000) : null,
               updatedAt: Date.now(),
             },
@@ -184,11 +155,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
       }
 
-      // 2) Subscription lifecycle changes (created/updated/deleted)
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const sub = event.data.object as Stripe.Subscription;
-
         const customerId = sub.customer as string;
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
@@ -196,13 +165,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const priceId = sub.items.data[0]?.price?.id;
         const tier = priceId ? PRICE_TO_TIER[priceId] : undefined;
 
-        // cancel_at_period_end means user keeps access until period end, then downgrades
         if (sub.cancel_at_period_end) {
           await userRef.set(
             {
               subscriptionCancelAt: sub.cancel_at ?? sub.current_period_end ?? null,
               subscriptionStatus: sub.status,
-              subscriptionEndDate: new Date((sub.current_period_end || sub.cancel_at) * 1000),
+              subscriptionEndDate: new Date(
+                (sub.current_period_end || sub.cancel_at) * 1000
+              ),
               updatedAt: Date.now(),
             },
             { merge: true }
@@ -237,18 +207,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const customerId = sub.customer as string;
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
-
-        // Immediate downgrade on deletion
         await setUserToFree({ userRef, reason: "subscription.deleted" });
         break;
       }
 
-      // 3) Payments/refunds
       case "invoice.payment_succeeded": {
-        // successful renewal → extend end date
         const invoice = event.data.object as Stripe.Invoice;
         const subId = invoice.subscription as string | null;
         if (!subId) break;
+
         const sub = await stripe.subscriptions.retrieve(subId);
         const customerId = sub.customer as string;
         const userRef = await getUserRefForCustomer(customerId);
@@ -271,44 +238,80 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       case "invoice.payment_failed": {
-        // Mark as past_due; do not immediately downgrade
         const invoice = event.data.object as Stripe.Invoice;
         const subId = invoice.subscription as string | null;
         if (!subId) break;
+
         const sub = await stripe.subscriptions.retrieve(subId);
         const customerId = sub.customer as string;
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
 
         await userRef.set(
-          {
-            subscriptionStatus: "past_due",
-            updatedAt: Date.now(),
-          },
+          { subscriptionStatus: "past_due", updatedAt: Date.now() },
           { merge: true }
         );
         break;
       }
 
-      case "charge.refunded":
-      case "charge.refund.updated":
-      case "refund.created": {
-        // Refunds can be partial or full. For full refunds on a first term, you may choose to downgrade now.
-        const obj = event.data.object as any;
-        const charge = event.type === "refund.created" ? obj.charge : obj;
-        const ch =
-          typeof charge === "string" ? await stripe.charges.retrieve(charge) : charge;
-
-        const customerId = ch.customer as string | undefined;
+      case "charge.refunded": {
+        const charge = event.data.object as Stripe.Charge;
+        const customerId = charge.customer as string | undefined;
         if (!customerId) break;
+
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
 
-        // If full refund & there is an active subscription, you may cancel immediately:
-        const isFullRefund = ch.amount_refunded && ch.amount_refunded === ch.amount;
+        const isFullRefund =
+          typeof charge.amount_refunded === "number" &&
+          typeof charge.amount === "number" &&
+          charge.amount_refunded === charge.amount;
+
         if (isFullRefund) {
-          // Optional: cancel subscription immediately
-          // If you prefer to leave access until period end, skip cancellation and just mark status.
+          await userRef.set(
+            {
+              lastRefundAt: Date.now(),
+              lastRefundAmount: charge.amount_refunded,
+              subscriptionStatus: "refunded",
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+        } else {
+          await userRef.set(
+            {
+              lastRefundAt: Date.now(),
+              lastRefundAmount: charge.amount_refunded ?? 0,
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+        }
+        break;
+      }
+
+      case "refund.created":
+      case "charge.refund.updated": {
+        const refund = event.data.object as Stripe.Refund;
+
+        const chargeId =
+          typeof refund.charge === "string"
+            ? refund.charge
+            : (refund.charge as Stripe.Charge).id;
+
+        const ch = await stripe.charges.retrieve(chargeId);
+        const customerId = ch.customer as string | undefined;
+        if (!customerId) break;
+
+        const userRef = await getUserRefForCustomer(customerId);
+        if (!userRef) break;
+
+        const isFullRefund =
+          typeof ch.amount_refunded === "number" &&
+          typeof ch.amount === "number" &&
+          ch.amount_refunded === ch.amount;
+
+        if (isFullRefund) {
           await userRef.set(
             {
               lastRefundAt: Date.now(),
@@ -332,14 +335,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       default:
-        // For visibility while you iterate
-        // console.log(`Unhandled event type ${event.type}`);
         break;
     }
 
     return res.status(200).json({ received: true });
-  } catch (err: any) {
-    console.error("Webhook handler error", err);
-    return res.status(500).send(`Webhook handler error: ${err.message}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Webhook handler error", msg);
+    return res.status(500).send(`Webhook handler error: ${msg}`);
   }
 }
