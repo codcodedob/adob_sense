@@ -21,15 +21,14 @@ if (!admin.apps.length) {
 // Optional: ensure Stripe key exists early (helps with clearer errors)
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
 if (!STRIPE_KEY) {
-  // Throwing here will surface a clear 500 explaining what's wrong
   throw new Error("Missing STRIPE_SECRET_KEY env");
 }
 
-// Types for JSON responses
+// Response types
 type Ok = { stripeCustomerId: string };
-type Err = { error: string };
+type Err = { error: string; code?: string }; // ✅ allow `code` here
 
-// Small helper: extract Bearer token safely
+// Extract Bearer token
 function getBearerToken(req: NextApiRequest): string | null {
   const header = req.headers.authorization;
   if (!header) return null;
@@ -49,37 +48,36 @@ export default async function handler(
 
     const token = getBearerToken(req);
     if (!token) {
-      return res.status(401).json({ error: "Missing or invalid Authorization header" });
+      return res.status(401).json({
+        error: "Missing or invalid Authorization header",
+      });
     }
 
-    // Verify Firebase ID token and get user info
+    // Verify Firebase ID token
     const decoded = await getAuth().verifyIdToken(token);
     const uid = decoded.uid;
     const email = decoded.email || undefined;
 
-    // Create (or reuse) Stripe customer and persist to Firestore inside the helper
+    // Create or reuse Stripe customer
     const stripeCustomerId = await createStripeCustomerForUser(uid, email);
 
     return res.status(200).json({ stripeCustomerId });
   } catch (e: unknown) {
-  // Normalize the error shape
-  const err = e as { code?: string; message?: string };
+    const err = e as { code?: string; message?: string };
 
-  // Admin SDK uses string codes like "auth/user-not-found"
-  const isAuthError = typeof err?.code === "string" && err.code.startsWith("auth/");
+    const isAuthError =
+      typeof err?.code === "string" && err.code.startsWith("auth/");
 
-  if (isAuthError) {
-    console.error("Firebase Auth error:", err);
-    return res.status(401).json({
-      error: err.message ?? "Authentication error",
-      code: err.code,
-    });
+    if (isAuthError) {
+      console.error("Firebase Auth error:", err);
+      return res.status(401).json({
+        error: err.message ?? "Authentication error",
+        code: err.code, // ✅ now allowed by type
+      });
+    }
+
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("Unexpected error creating Stripe customer:", e);
+    return res.status(500).json({ error: message });
   }
-
-  // Fallback: unexpected errors
-  const message = e instanceof Error ? e.message : String(e);
-  console.error("Unexpected error creating Stripe customer:", e);
-  return res.status(500).json({ error: message });
-}
-
 }
