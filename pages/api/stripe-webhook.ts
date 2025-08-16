@@ -1,14 +1,14 @@
 // pages/api/stripe-webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import Stripe from "stripe";
-import { db } from "../../lib/firebaseAdmin"; // Firestore Admin SDK
+import { adminDb } from "../../lib/firebaseAdmin"; // Firestore Admin SDK
 import { Timestamp } from "firebase-admin/firestore";
 import { dateFields } from "../../lib/dateFields";
 
 export const config = { api: { bodyParser: false } };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2024-06-20",
+  apiVersion: "2025-07-30.basil",
 });
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
 
@@ -60,7 +60,7 @@ export default async function handler(
       const now = new Date();
       const { day, month, year, iso } = dateFields(now);
 
-      await db
+      await adminDb
         .collection("users")
         .doc(uid)
         .collection("visits")
@@ -74,7 +74,7 @@ export default async function handler(
         });
 
       if (session.mode === "subscription") {
-        await db
+        await adminDb
           .collection("users")
           .doc(uid)
           .set(
@@ -96,8 +96,8 @@ export default async function handler(
           { limit: 50 }
         );
 
-        const batch = db.batch();
-        const libCol = db.collection("users").doc(uid).collection("library");
+        const batch = adminDb.batch();
+        const libCol = adminDb.collection("users").doc(uid).collection("library");
 
         for (const li of lineItems.data) {
           const priceId = (li.price?.id as string) || null;
@@ -166,7 +166,7 @@ export default async function handler(
       const now = new Date();
       const { day, month, year, iso } = dateFields(now);
 
-      await db
+      await adminDb
         .collection("users")
         .doc(uid)
         .set(
