@@ -115,7 +115,7 @@ export default async function handler(
           });
         }
 
-        const plItemRef = db
+        const plItemRef = adminDb
           .collection("users")
           .doc(uid)
           .collection("playlists")
@@ -138,7 +138,7 @@ export default async function handler(
       const end = new Date(sub.current_period_end * 1000);
       const { day, month, year, iso } = dateFields(end);
 
-      await db
+      await adminDb
         .collection("users")
         .doc(uid)
         .set(
