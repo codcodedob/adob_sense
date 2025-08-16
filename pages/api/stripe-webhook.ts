@@ -8,7 +8,7 @@ import { dateFields } from "../../lib/dateFields";
 export const config = { api: { bodyParser: false } };
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2024-06-20", // <- use a valid version
+  apiVersion: "2025-07-30.basil", // <- use a valid version
 });
 
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET as string;
