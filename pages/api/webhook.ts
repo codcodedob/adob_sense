@@ -29,8 +29,14 @@ const PRICE_TO_TIER: Record<string, "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX"> = {
   [process.env.NEXT_PUBLIC_STRIPE_PRICE_DEMANDX as string]: "DEMANDX",
 };
 
+/** Safely read `current_period_end` for beta Stripe types */
+function getCurrentPeriodEnd(sub: Stripe.Subscription | null | undefined): number | null {
+  if (!sub) return null;
+  const s = sub as unknown as { current_period_end?: unknown };
+  return typeof s.current_period_end === "number" ? s.current_period_end : null;
+}
+
 async function getUserRefForCustomer(customerId: string) {
-  // primary lookup in Firestore
   const q = await adminDb
     .collection("users")
     .where("stripeCustomerId", "==", customerId)
@@ -39,28 +45,22 @@ async function getUserRefForCustomer(customerId: string) {
 
   if (!q.empty) return q.docs[0].ref;
 
-  // fallback: stripe.customer.metadata.uid (when not a DeletedCustomer)
   const resp = await stripe.customers.retrieve(customerId);
-  // resp is Stripe.Response<Customer | DeletedCustomer>
-  if ("deleted" in resp && resp.deleted) {
-    return null; // it's a DeletedCustomer — no metadata available
-  }
+  if (typeof resp === "string") return null;
+  if ("deleted" in resp && resp.deleted) return null;
 
   const customer = resp as Stripe.Customer;
   const uid = customer.metadata?.uid;
-  if (uid) return adminDb.collection("users").doc(uid);
-
-  return null;
+  return uid ? adminDb.collection("users").doc(uid) : null;
 }
-
 
 async function setUserSubscription(opts: {
   userRef: FirebaseFirestore.DocumentReference;
   tier: "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX";
   currentPeriodEnd: number | null;
   status: string;
-  stripeCustomerId?: string;
-  subscriptionId?: string;
+  stripeCustomerId?: string | null;
+  subscriptionId?: string | null;
 }) {
   const { userRef, tier, currentPeriodEnd, status, stripeCustomerId, subscriptionId } = opts;
   await userRef.set(
@@ -137,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const priceId = sub?.items?.data?.[0]?.price?.id;
         if (priceId) tier = PRICE_TO_TIER[priceId] ?? null;
 
-        const end = sub?.current_period_end ?? null;
+        const end = getCurrentPeriodEnd(sub);
         const status = sub?.status ?? "active";
 
         if (tier) {
@@ -147,7 +147,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             currentPeriodEnd: end,
             status,
             stripeCustomerId: customerId,
-            subscriptionId: sub?.id,
+            subscriptionId: sub?.id ?? null,
           });
         } else {
           await userRef.set(
@@ -174,14 +174,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const priceId = sub.items.data[0]?.price?.id;
         const tier = priceId ? PRICE_TO_TIER[priceId] : undefined;
 
+        const end = getCurrentPeriodEnd(sub);
+
         if (sub.cancel_at_period_end) {
+          const cancelAt =
+            (typeof (sub as unknown as { cancel_at?: number }).cancel_at === "number"
+              ? (sub as unknown as { cancel_at?: number }).cancel_at
+              : null) ?? end;
+
           await userRef.set(
             {
-              subscriptionCancelAt: sub.cancel_at ?? sub.current_period_end ?? null,
+              subscriptionCancelAt: cancelAt,
               subscriptionStatus: sub.status,
-              subscriptionEndDate: new Date(
-                (sub.current_period_end || sub.cancel_at) * 1000
-              ),
+              subscriptionEndDate: cancelAt ? new Date(cancelAt * 1000) : null,
               updatedAt: Date.now(),
             },
             { merge: true }
@@ -190,7 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await setUserSubscription({
             userRef,
             tier,
-            currentPeriodEnd: sub.current_period_end,
+            currentPeriodEnd: end,
             status: sub.status,
             stripeCustomerId: customerId,
             subscriptionId: sub.id,
@@ -199,9 +204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await userRef.set(
             {
               subscriptionStatus: sub.status,
-              subscriptionEndDate: sub.current_period_end
-                ? new Date(sub.current_period_end * 1000)
-                : null,
+              subscriptionEndDate: end ? new Date(end * 1000) : null,
               stripeSubscriptionId: sub.id,
               updatedAt: Date.now(),
             },
@@ -232,12 +235,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const priceId = sub.items.data[0]?.price?.id;
         const tier = priceId ? PRICE_TO_TIER[priceId] : undefined;
+        const end = getCurrentPeriodEnd(sub);
 
         if (tier) {
           await setUserSubscription({
             userRef,
             tier,
-            currentPeriodEnd: sub.current_period_end,
+            currentPeriodEnd: end,
             status: sub.status,
             stripeCustomerId: customerId,
             subscriptionId: sub.id,
@@ -302,7 +306,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       case "refund.created":
       case "charge.refund.updated": {
         const refund = event.data.object as Stripe.Refund;
-
         const chargeId =
           typeof refund.charge === "string"
             ? refund.charge
