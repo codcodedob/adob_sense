@@ -1,12 +1,14 @@
 // pages/login.tsx
 import { useState } from "react";
-import { useRouter } from "next/router";
 import {
   signInWithEmailAndPassword,
   GoogleAuthProvider,
   signInWithPopup,
 } from "firebase/auth";
-import { auth } from "@/lib/firebaseClient"; // ✅ use the singleton; do NOT initialize here
+import { useRouter } from "next/router";
+
+// Reuse the singleton Firebase app/auth from our client lib (prevents duplicate-app)
+import { auth } from "@/lib/firebaseClient";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -54,6 +56,7 @@ export default function LoginPage() {
           className="rounded border border-gray-700 bg-gray-800 p-2"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          autoComplete="email"
           required
         />
         <input
@@ -62,6 +65,7 @@ export default function LoginPage() {
           className="rounded border border-gray-700 bg-gray-800 p-2"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
           required
         />
         <button
