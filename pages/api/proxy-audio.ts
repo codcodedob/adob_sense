@@ -83,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         body as ReadableStream<Uint8Array>
       );
     } else {
-      // @ts-expect-error Node.js fetch body may already be a Readable
+      
       nodeStream = body as unknown as Readable;
     }
 
