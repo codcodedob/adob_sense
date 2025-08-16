@@ -23,6 +23,7 @@ async function readRawBody(req: NextApiRequest): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+
 const PRICE_TO_TIER: Record<string, "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX"> = {
   [process.env.NEXT_PUBLIC_STRIPE_PRICE_ADOBSENSE as string]: "ADOB_SENSE",
   [process.env.NEXT_PUBLIC_STRIPE_PRICE_DOBEONE as string]: "DOBE_ONE",
@@ -102,6 +103,53 @@ async function alreadyProcessed(eventId: string) {
 }
 
 // --- Handler ---------------------------------------------------------------
+// --- Invoice helpers (put above the handler) ------------------------------
+// --- Invoice helpers (keep these above the handler) -----------------------
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const anyInv = invoice as unknown as {
+    subscription?: unknown;
+    subscription_details?: { subscription?: unknown } | unknown;
+  };
+
+  if (typeof anyInv.subscription === "string") return anyInv.subscription;
+
+  if (
+    anyInv.subscription &&
+    typeof anyInv.subscription === "object" &&
+    "id" in (anyInv.subscription as Record<string, unknown>)
+  ) {
+    const id = (anyInv.subscription as { id?: unknown }).id;
+    if (typeof id === "string") return id;
+  }
+
+  const details = anyInv.subscription_details;
+  if (
+    details &&
+    typeof details === "object" &&
+    "subscription" in (details as Record<string, unknown>)
+  ) {
+    const sub = (details as { subscription?: unknown }).subscription;
+    if (typeof sub === "string") return sub;
+  }
+
+  return null;
+}
+
+function getLineItemPriceId(line?: Stripe.InvoiceLineItem): string | null {
+  if (!line) return null;
+  const anyLine = line as unknown as { price?: unknown };
+
+  const p = anyLine.price;
+  if (!p) return null;
+
+  if (typeof p === "string") return p; // price ID
+  if (typeof p === "object" && p !== null && "id" in p) {
+    const id = (p as { id?: unknown }).id;
+    return typeof id === "string" ? id : null;
+  }
+  return null;
+}
+
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
@@ -226,13 +274,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       case "invoice.payment_succeeded": {
         const invoice = event.data.object as Stripe.Invoice;
       
-        const customerId = invoice.customer as string | null;
-        if (!customerId) break;
+        const subId = getInvoiceSubscriptionId(invoice);
+        if (!subId) break;
       
         const line = invoice.lines?.data?.[0];
-        const priceId = line?.price?.id;
+        const priceIdFromLine = getLineItemPriceId(line);
         const end = (line?.period?.end ?? null) as number | null;
       
+        const sub = await stripe.subscriptions.retrieve(subId);
+      
+        const priceId = sub.items.data[0]?.price?.id ?? priceIdFromLine ?? null;
+      
+        const customerId = sub.customer as string;
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
       
@@ -242,32 +295,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await setUserSubscription({
             userRef,
             tier,
-            currentPeriodEnd: end,
-            status: "active",
+            currentPeriodEnd:
+              (sub as unknown as { current_period_end?: number }).current_period_end ??
+              end ??
+              null,
+            status: sub.status,
             stripeCustomerId: customerId,
-            subscriptionId: null, // we’re not reading it here
+            subscriptionId: sub.id,
           });
         }
         break;
       }
       
-
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
-        const subId = invoice.subscription as string | null;
+        const subId = getInvoiceSubscriptionId(invoice);
         if (!subId) break;
-
+      
         const sub = await stripe.subscriptions.retrieve(subId);
         const customerId = sub.customer as string;
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
-
+      
         await userRef.set(
           { subscriptionStatus: "past_due", updatedAt: Date.now() },
           { merge: true }
         );
         break;
       }
+      
 
       case "charge.refunded": {
         const charge = event.data.object as Stripe.Charge;
