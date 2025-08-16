@@ -5,13 +5,13 @@ import * as admin from "firebase-admin";
 import { adminDb } from "@/lib/firebaseAdmin";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
-  apiVersion: "2025-07-30.basil",
+  apiVersion: "2024-06-20",
 });
 
 type Body = {
   uid: string;
-  amount?: number;     // cents; omit for full refund
-  chargeId?: string;   // optional explicit charge id
+  amount?: number;    // cents; omit for full refund
+  chargeId?: string;  // optional explicit charge id
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -25,40 +25,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const user = userSnap.data() as { stripeCustomerId?: string } | undefined;
     if (!user?.stripeCustomerId) return res.status(400).json({ error: "No stripeCustomerId" });
 
-    // Determine which charge to refund
     let chargeToRefund: string | undefined = chargeId;
 
     if (!chargeToRefund) {
-      // 1) Try most recent PAID invoice -> PaymentIntent.latest_charge
+      // Try most recent PAID invoice -> resolve via payment_intent.latest_charge
       const invoices = await stripe.invoices.list({
         customer: user.stripeCustomerId,
         status: "paid",
         limit: 1,
       });
-
       const inv = invoices.data[0];
 
-      // Prefer invoice.charge if present (older versions sometimes include this)
-      if (inv && typeof inv.charge === "string") {
-        chargeToRefund = inv.charge;
-      }
-
-      // Else resolve via payment_intent.latest_charge
-      if (!chargeToRefund && inv?.payment_intent) {
-        const piId =
-          typeof inv.payment_intent === "string"
-            ? inv.payment_intent
-            : inv.payment_intent.id;
+      if (inv?.payment_intent) {
+        const piId = typeof inv.payment_intent === "string"
+          ? inv.payment_intent
+          : inv.payment_intent.id;
 
         if (piId) {
           const pi = await stripe.paymentIntents.retrieve(piId);
           const latest = pi.latest_charge;
-          if (typeof latest === "string") chargeToRefund = latest;
-          else if (latest && typeof latest === "object") chargeToRefund = latest.id;
+          if (typeof latest === "string") {
+            chargeToRefund = latest;
+          } else if (latest && typeof latest === "object") {
+            chargeToRefund = latest.id;
+          }
         }
       }
 
-      // 2) Final fallback: the customer's most recent charge
+      // Final fallback: latest charge for the customer
       if (!chargeToRefund) {
         const charges = await stripe.charges.list({
           customer: user.stripeCustomerId,
@@ -72,14 +66,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Create the refund
     const refund = await stripe.refunds.create({
       charge: chargeToRefund,
       ...(typeof amount === "number" ? { amount } : {}),
       reason: "requested_by_customer",
     });
 
-    // Record on user doc
     await adminDb.collection("users").doc(uid).set(
       {
         lastRefundId: refund.id,
@@ -90,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     return res.status(200).json({ refund });
-  } catch (err: unknown) {
+  } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("refund endpoint error:", message);
     return res.status(500).json({ error: message || "Refund error" });
