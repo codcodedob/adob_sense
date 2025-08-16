@@ -62,21 +62,24 @@ export default async function handler(
 
     return res.status(200).json({ stripeCustomerId });
   } catch (e: unknown) {
-    // ESLint-friendly error handling
-    if (e instanceof admin.auth.AuthError) {
-      // AuthError (rarely directly thrown here, but just in case)
-      console.error("Firebase Auth error:", e);
-      return res.status(401).json({ error: e.message });
-    }
-    if (e instanceof Stripe.errors.StripeError) {
-      console.error("Stripe error:", e);
-      return res.status(502).json({ error: e.message });
-    }
-    if (e instanceof Error) {
-      console.error(e);
-      return res.status(500).json({ error: e.message });
-    }
-    console.error("Unknown error:", e);
-    return res.status(500).json({ error: "Unknown error" });
+  // Normalize the error shape
+  const err = e as { code?: string; message?: string };
+
+  // Admin SDK uses string codes like "auth/user-not-found"
+  const isAuthError = typeof err?.code === "string" && err.code.startsWith("auth/");
+
+  if (isAuthError) {
+    console.error("Firebase Auth error:", err);
+    return res.status(401).json({
+      error: err.message ?? "Authentication error",
+      code: err.code,
+    });
   }
+
+  // Fallback: unexpected errors
+  const message = e instanceof Error ? e.message : String(e);
+  console.error("Unexpected error creating Stripe customer:", e);
+  return res.status(500).json({ error: message });
+}
+
 }
