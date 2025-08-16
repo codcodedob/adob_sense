@@ -30,6 +30,7 @@ const PRICE_TO_TIER: Record<string, "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX"> = {
 };
 
 async function getUserRefForCustomer(customerId: string) {
+  // primary lookup in Firestore
   const q = await adminDb
     .collection("users")
     .where("stripeCustomerId", "==", customerId)
@@ -38,12 +39,20 @@ async function getUserRefForCustomer(customerId: string) {
 
   if (!q.empty) return q.docs[0].ref;
 
-  const customer = await stripe.customers.retrieve(customerId);
-  if (customer && typeof customer !== "string" && customer.metadata?.uid) {
-    return adminDb.collection("users").doc(customer.metadata.uid);
+  // fallback: stripe.customer.metadata.uid (when not a DeletedCustomer)
+  const resp = await stripe.customers.retrieve(customerId);
+  // resp is Stripe.Response<Customer | DeletedCustomer>
+  if ("deleted" in resp && resp.deleted) {
+    return null; // it's a DeletedCustomer — no metadata available
   }
+
+  const customer = resp as Stripe.Customer;
+  const uid = customer.metadata?.uid;
+  if (uid) return adminDb.collection("users").doc(uid);
+
   return null;
 }
+
 
 async function setUserSubscription(opts: {
   userRef: FirebaseFirestore.DocumentReference;
