@@ -225,30 +225,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       case "invoice.payment_succeeded": {
         const invoice = event.data.object as Stripe.Invoice;
-        const subId = invoice.subscription as string | null;
-        if (!subId) break;
-
-        const sub = await stripe.subscriptions.retrieve(subId);
-        const customerId = sub.customer as string;
+      
+        const customerId = invoice.customer as string | null;
+        if (!customerId) break;
+      
+        const line = invoice.lines?.data?.[0];
+        const priceId = line?.price?.id;
+        const end = (line?.period?.end ?? null) as number | null;
+      
         const userRef = await getUserRefForCustomer(customerId);
         if (!userRef) break;
-
-        const priceId = sub.items.data[0]?.price?.id;
+      
         const tier = priceId ? PRICE_TO_TIER[priceId] : undefined;
-        const end = getCurrentPeriodEnd(sub);
-
+      
         if (tier) {
           await setUserSubscription({
             userRef,
             tier,
             currentPeriodEnd: end,
-            status: sub.status,
+            status: "active",
             stripeCustomerId: customerId,
-            subscriptionId: sub.id,
+            subscriptionId: null, // we’re not reading it here
           });
         }
         break;
       }
+      
 
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
