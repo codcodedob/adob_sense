@@ -1,22 +1,12 @@
+// pages/login.tsx
 import { useState } from "react";
+import { useRouter } from "next/router";
 import {
-  getAuth,
   signInWithEmailAndPassword,
   GoogleAuthProvider,
   signInWithPopup,
 } from "firebase/auth";
-import { useRouter } from "next/router";
-import { initializeApp } from "firebase/app";
-
-// Make sure you already have your Firebase config in env variables
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+import { auth } from "@/lib/firebaseClient"; // ✅ use the singleton; do NOT initialize here
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,13 +21,9 @@ export default function LoginPage() {
     setError("");
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      router.push("/"); // go back home
+      router.push("/");
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("An unexpected error occurred");
-      }
+      setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setLoading(false);
     }
@@ -51,37 +37,36 @@ export default function LoginPage() {
       await signInWithPopup(auth, provider);
       router.push("/");
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("An unexpected error occurred");
-      }
+      setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
-      <h1 className="text-3xl font-bold mb-6">Sign In</h1>
-      <form onSubmit={signInEmail} className="flex flex-col space-y-4 w-72">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-900 text-white">
+      <h1 className="mb-6 text-3xl font-bold">Sign In</h1>
+
+      <form onSubmit={signInEmail} className="flex w-72 flex-col space-y-4">
         <input
           type="email"
           placeholder="Email"
-          className="p-2 rounded bg-gray-800 border border-gray-700"
+          className="rounded border border-gray-700 bg-gray-800 p-2"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          required
         />
         <input
           type="password"
           placeholder="Password"
-          className="p-2 rounded bg-gray-800 border border-gray-700"
+          className="rounded border border-gray-700 bg-gray-800 p-2"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          required
         />
         <button
           type="submit"
-          className="bg-blue-600 hover:bg-blue-700 p-2 rounded"
+          className="rounded bg-blue-600 p-2 hover:bg-blue-700 disabled:opacity-60"
           disabled={loading}
         >
           {loading ? "Loading..." : "Sign In"}
@@ -91,7 +76,7 @@ export default function LoginPage() {
       <div className="mt-4">
         <button
           onClick={signInGoogle}
-          className="bg-red-600 hover:bg-red-700 p-2 rounded"
+          className="rounded bg-red-600 p-2 hover:bg-red-700 disabled:opacity-60"
           disabled={loading}
         >
           {loading ? "Loading..." : "Sign in with Google"}
