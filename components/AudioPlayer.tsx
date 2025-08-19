@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import WaveSurfer, { WaveSurferOptions } from "wavesurfer.js";
 
-type Reason = "pause" | "change" | "error" | "end";
+export type Reason = "pause" | "change" | "error" | "end";
+
+export type AudioPlayerHandle = {
+  play: () => void;
+  pause: () => void;
+  toggle: () => void;
+  isPlaying: () => boolean;
+};
 
 type AudioPlayerProps = {
   src: string;
@@ -12,41 +19,44 @@ type AudioPlayerProps = {
   height?: number;
 };
 
-export default function AudioPlayer({
-  src,
-  onPlayStart,
-  onQualified,
-  onStop,
-  onFinish,
-  height = 84,
-}: AudioPlayerProps) {
+const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(function AudioPlayer(
+  { src, onPlayStart, onQualified, onStop, onFinish, height = 84 },
+  ref
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
-
   const [isPlaying, setIsPlaying] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
   const playedRef = useRef(0);
   const qualifiedSentRef = useRef(false);
+
+  useImperativeHandle(ref, () => ({
+    play() {
+      const ws = wavesurferRef.current;
+      if (!ws) return;
+      ws.play();
+    },
+    pause() {
+      const ws = wavesurferRef.current;
+      if (!ws) return;
+      ws.pause();
+    },
+    toggle() {
+      const ws = wavesurferRef.current;
+      if (!ws) return;
+      ws.isPlaying() ? ws.pause() : ws.play();
+    },
+    isPlaying() {
+      return isPlaying;
+    },
+  }), [isPlaying]);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Tear down previous instance (and notify parent)
     if (wavesurferRef.current) {
-      try {
-        onStop?.(Math.floor(playedRef.current), "change");
-      } catch (e) {
-        console.warn("onStop(change) failed:", e);
-      }
-      try {
-        wavesurferRef.current.destroy();
-      } catch (e: unknown) {
-        const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
-        if (name !== "AbortError") {
-          console.warn("wavesurfer destroy warning:", e);
-        }
-      }
+      try { onStop?.(Math.floor(playedRef.current), "change"); } catch {}
+      try { wavesurferRef.current.destroy(); } catch {}
       wavesurferRef.current = null;
     }
 
@@ -68,40 +78,22 @@ export default function AudioPlayer({
     const ws = WaveSurfer.create(options);
     wavesurferRef.current = ws;
 
-    ws.on("ready", () => {
-      ws.play();
-      setIsPlaying(true);
-      onPlayStart?.();
-    });
-
-    ws.on("play", () => setIsPlaying(true));
-
-    ws.on("pause", () => {
-      setIsPlaying(false);
-      onStop?.(Math.floor(playedRef.current), "pause");
-    });
-
+    ws.on("ready", () => { ws.play(); setIsPlaying(true); onPlayStart?.(); });
+    ws.on("play",  () => setIsPlaying(true));
+    ws.on("pause", () => { setIsPlaying(false); onStop?.(Math.floor(playedRef.current), "pause"); });
     ws.on("finish", () => {
       setIsPlaying(false);
-      try {
-        onFinish?.();
-      } finally {
-        onStop?.(Math.floor(playedRef.current), "end");
-      }
+      try { onFinish?.(); } finally { onStop?.(Math.floor(playedRef.current), "end"); }
     });
-
     ws.on("audioprocess", () => {
       const t = ws.getCurrentTime();
       playedRef.current = t;
-
       if (!qualifiedSentRef.current && t >= 15) {
         qualifiedSentRef.current = true;
         onQualified?.(Math.floor(t));
       }
     });
-
-    ws.on("error", (e: unknown) => {
-      console.error("WaveSurfer error:", e);
+    ws.on("error", () => {
       setErr("Couldn’t load this audio URL.");
       setIsPlaying(false);
       onStop?.(Math.floor(playedRef.current), "error");
@@ -110,43 +102,30 @@ export default function AudioPlayer({
     ws.load(src);
 
     return () => {
-      try {
-        ws.destroy();
-      } catch (e: unknown) {
-        const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
-        if (name !== "AbortError") {
-          console.warn("wavesurfer destroy warning:", e);
-        }
-      }
+      try { ws.destroy(); } catch {}
       wavesurferRef.current = null;
     };
   }, [src, height, onPlayStart, onQualified, onStop, onFinish]);
-
-  const togglePlay = () => {
-    const ws = wavesurferRef.current;
-    if (!ws) return;
-    if (isPlaying) ws.pause();
-    else ws.play();
-  };
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
       <div ref={containerRef} />
       {err && <p className="mt-2 text-sm text-red-600">{err}</p>}
-
+      {/* Local play/pause button is still useful */}
       <div className="mt-3 flex items-center gap-2">
         <button
           type="button"
-          onClick={togglePlay}
+          onClick={() => (wavesurferRef.current?.isPlaying() ? wavesurferRef.current.pause() : wavesurferRef.current?.play())}
           className="rounded-md bg-cyan-600 px-3 py-1.5 text-white hover:bg-cyan-700"
         >
           {isPlaying ? "Pause" : "Play"}
         </button>
         <span className="text-xs text-gray-500">
-          {Math.floor(playedRef.current)}s listened
-          {qualifiedSentRef.current ? " • qualified" : ""}
+          {Math.floor(playedRef.current)}s listened{qualifiedSentRef.current ? " • qualified" : ""}
         </span>
       </div>
     </div>
   );
-}
+});
+
+export default AudioPlayer;

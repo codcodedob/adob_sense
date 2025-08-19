@@ -6,34 +6,49 @@ type MasterTab = "Hipsession" | "Adob Sense" | "Playlist";
 type Sense = "Sound" | "Vision" | "Touch" | "Taste" | "Live";
 type Plan = "ADOB_SENSE" | "DOBE_ONE" | "DEMANDX";
 
+type Track = {
+  id: string;
+  name?: string;
+  artists?: string[];
+  duration?: number | string | null;
+  url?: string | null;
+  videoUrl?: string | null;
+};
+
 type Props = {
-  // navigation/state coming from the page
   activeMaster: MasterTab;
   onMasterChange: (tab: MasterTab) => void;
   activeSense: Sense;
   onSenseChange: (sense: Sense) => void;
 
-  // player quick control
   isPlaying?: boolean;
   onPlayPause?: () => void;
 
-  // chat / checkout hooks
   onOpenChat?: () => void;
   onCheckout?: (plan: Plan) => void;
 
-  // user + subscription
   userName?: string | null;
-  subscriptionType?: string | null; // e.g. "FREETRIAL" | "ADOB_SENSE" | ...
-  trialEndsAt?: Date | string | null; // when free trial ends
+  subscriptionType?: string | null;
+  trialEndsAt?: Date | string | null;
+
+  selectedAlbumTitle?: string | null;
+  selectedAlbumId?: string | null;
+  selectedAlbumTracks?: Track[] | null;
+
+  onPlayTrack?: (track: Track) => void;
+  onSubscribeAlbum?: (albumId: string) => void;
+  onFavoriteTrack?: (trackId: string) => void;
+  onShareAlbum?: (albumId: string) => void;
 };
 
 const MASTER_TABS: MasterTab[] = ["Hipsession", "Adob Sense", "Playlist"];
+// Use your original icon locations in /public
 const SENSES: { key: Sense; icon: string }[] = [
-  { key: "Sound", icon: "/icons/sound.svg" },
-  { key: "Vision", icon: "/icons/vision.svg" },
-  { key: "Touch", icon: "/icons/touch.svg" },
-  { key: "Taste", icon: "/icons/taste.svg" },
-  { key: "Live", icon: "/icons/live.svg" },
+  { key: "Sound",  icon: "/sound.svg"  },
+  { key: "Vision", icon: "/vision.svg" },
+  { key: "Touch",  icon: "/touch.svg"  },
+  { key: "Taste",  icon: "/taste.svg"  },
+  { key: "Live",   icon: "/live.svg"   },
 ];
 
 export default function HoverGuideHUD({
@@ -48,8 +63,14 @@ export default function HoverGuideHUD({
   userName,
   subscriptionType,
   trialEndsAt,
+  selectedAlbumTitle,
+  selectedAlbumId,
+  selectedAlbumTracks,
+  onPlayTrack,
+  onSubscribeAlbum,
+  onFavoriteTrack,
+  onShareAlbum,
 }: Props) {
-  // floating time HUD
   const HUD_SIZE = 72;
   const hudRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState({ x: 24, y: 24 });
@@ -57,7 +78,6 @@ export default function HoverGuideHUD({
   const [touchOffset, setTouchOffset] = useState({ x: 0, y: 0 });
   const [expanded, setExpanded] = useState(false);
 
-  // clock
   const [time, setTime] = useState(
     new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
   );
@@ -68,7 +88,6 @@ export default function HoverGuideHUD({
     return () => clearInterval(t);
   }, []);
 
-  // drag handlers
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging) return;
@@ -111,7 +130,6 @@ export default function HoverGuideHUD({
     setDragging(true);
   };
 
-  // trial countdown
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -139,15 +157,16 @@ export default function HoverGuideHUD({
     return `${m}m ${s}s`;
   };
 
-  // click on bubble toggles the panel (unless we’re dragging)
   const handleBubbleClick = () => {
     if (dragging) return;
     setExpanded((v) => !v);
   };
 
+  const albumQuicklistVisible =
+    !!selectedAlbumId && !!selectedAlbumTitle && (selectedAlbumTracks?.length ?? 0) > 0;
+
   return (
     <>
-      {/* Draggable FAB */}
       <div
         ref={hudRef}
         onMouseDown={handleMouseDown}
@@ -179,20 +198,18 @@ export default function HoverGuideHUD({
         {time}
       </div>
 
-      {/* Expanded HUD Panel */}
       {expanded && (
         <div
-          className="fixed z-[10001] w-[320px] max-w-[92vw] rounded-2xl bg-white/95 backdrop-blur-lg shadow-2xl border border-cyan-100 p-3"
+          className="fixed z-[10001] w-[340px] max-w-[92vw] rounded-2xl bg-white/95 backdrop-blur-lg shadow-2xl border border-cyan-100 p-3"
           style={{
-            top: Math.min(pos.y + HUD_SIZE + 8, window.innerHeight - 260),
-            left: Math.min(pos.x, window.innerWidth - 340),
+            top: Math.min(pos.y + HUD_SIZE + 8, window.innerHeight - 320),
+            left: Math.min(pos.x, window.innerWidth - 360),
           }}
         >
-          {/* Header */}
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <div className="relative h-7 w-7 overflow-hidden rounded-full bg-cyan-100 ring-2 ring-cyan-200">
-                <Image src="/icons/live.svg" alt="logo" fill className="object-contain p-1.5" />
+                <Image src="/live.svg" alt="logo" fill className="object-contain p-1.5" />
               </div>
               <div className="text-sm font-semibold text-gray-800">
                 {userName ? `Hello, ${userName}` : "Welcome to Adob Sense"}
@@ -207,7 +224,6 @@ export default function HoverGuideHUD({
             </button>
           </div>
 
-          {/* Trial / Sub status */}
           <div className="mt-3 rounded-md border bg-cyan-50/60 px-3 py-2 text-xs text-cyan-900">
             {trialInfo.active && (
               <div className="flex items-center justify-between">
@@ -226,29 +242,27 @@ export default function HoverGuideHUD({
             )}
           </div>
 
-          {/* Quick controls */}
           <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold hover:shadow"
-              onClick={() => onPlayPause && onPlayPause()}
+              onClick={() => onPlayPause?.()}
             >
               {isPlaying ? "Pause" : "Play"}
             </button>
             <button
               className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold hover:shadow"
-              onClick={() => onOpenChat && onOpenChat()}
+              onClick={() => onOpenChat?.()}
             >
               Ask Dobe
             </button>
             <button
               className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold hover:shadow"
-              onClick={() => onCheckout && onCheckout("ADOB_SENSE")}
+              onClick={() => onCheckout?.("ADOB_SENSE")}
             >
               Subscribe
             </button>
           </div>
 
-          {/* Master tabs */}
           <div className="mt-3 flex items-center justify-between rounded-xl border bg-white px-2 py-1">
             {MASTER_TABS.map((tab) => (
               <button
@@ -263,7 +277,6 @@ export default function HoverGuideHUD({
             ))}
           </div>
 
-          {/* Senses */}
           <div className="mt-2 grid grid-cols-5 gap-1">
             {SENSES.map((s) => (
               <button
@@ -280,24 +293,79 @@ export default function HoverGuideHUD({
             ))}
           </div>
 
-          {/* Upsell (trial expired) */}
+          {albumQuicklistVisible && (
+            <div className="mt-3 rounded-xl border bg-white">
+              <div className="flex items-center justify-between px-3 py-2">
+                <div className="text-sm font-semibold">
+                  {selectedAlbumTitle} — {selectedAlbumTracks?.length ?? 0} tracks
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+                    onClick={() => selectedAlbumId && onSubscribeAlbum?.(selectedAlbumId)}
+                  >
+                    Subscribe
+                  </button>
+                  <button
+                    className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+                    onClick={() => selectedAlbumId && onShareAlbum?.(selectedAlbumId)}
+                  >
+                    Share
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-48 overflow-y-auto divide-y">
+                {(selectedAlbumTracks ?? []).map((t, i) => {
+                  const label = t.name || (t.id ? `Track ${i + 1}` : `Untitled ${i + 1}`);
+                  const artists =
+                    t.artists && t.artists.length ? ` • ${t.artists.join(", ")}` : "";
+                  return (
+                    <div key={t.id} className="flex items-center justify-between px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{label}</p>
+                        {artists && <p className="truncate text-xs text-gray-500">{artists}</p>}
+                      </div>
+                      <div className="ml-3 flex items-center gap-1">
+                        <button
+                          className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+                          onClick={() => onPlayTrack?.(t)}
+                          title="Play"
+                        >
+                          ▶
+                        </button>
+                        <button
+                          className="rounded border px-2 py-1 text-xs hover:bg-gray-50"
+                          onClick={() => onFavoriteTrack?.(t.id)}
+                          title="Favorite"
+                        >
+                          ★
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {trialInfo.expired && (
             <div className="mt-3 grid grid-cols-3 gap-2">
               <button
                 className="rounded-lg bg-black px-2 py-2 text-xs font-semibold text-white"
-                onClick={() => onCheckout && onCheckout("ADOB_SENSE")}
+                onClick={() => onCheckout?.("ADOB_SENSE")}
               >
                 Get Sense
               </button>
               <button
                 className="rounded-lg bg-black px-2 py-2 text-xs font-semibold text-white"
-                onClick={() => onCheckout && onCheckout("DOBE_ONE")}
+                onClick={() => onCheckout?.("DOBE_ONE")}
               >
                 Dobe One
               </button>
               <button
                 className="rounded-lg bg-black px-2 py-2 text-xs font-semibold text-white"
-                onClick={() => onCheckout && onCheckout("DEMANDX")}
+                onClick={() => onCheckout?.("DEMANDX")}
               >
                 Demand X
               </button>

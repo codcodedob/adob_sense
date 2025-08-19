@@ -10,10 +10,11 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
-import AudioPlayer from "../components/AudioPlayer";
-import TouchSensePanels from "../components/TouchSensePanels";
-import TrialBanner from "../components/TrialBanner";
+import AudioPlayer from "@/components/AudioPlayer";
+import TouchSensePanels from "@/components/TouchSensePanels";
+import TrialBanner from "@/components/TrialBanner";
 import SubscribeButtons from "@/components/SubscribeButtons";
+
 import {
   collection,
   getDocs,
@@ -22,10 +23,10 @@ import {
   type DocumentData,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
-import { db } from "../lib/firebaseClient";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { db } from "@/lib/firebaseClient";
+import { getAuth, signInAnonymously, onAuthStateChanged, type User } from "firebase/auth";
 
-import { startAlbumView, startView, saveRating } from "../lib/views";
+import { startAlbumView, startView, saveRating } from "@/lib/views";
 
 // HUD must be client-only to avoid SSR time drift hydration errors
 const HoverGuideHUD = dynamic(() => import("@/components/HoverGuideHUD"), { ssr: false });
@@ -64,10 +65,10 @@ export type SoundDoc = {
   soundDescription?: string;
   stock?: number;
   timeStamp?: unknown;
-  url?: string;
-  videoUrl?: string;
-  enterSound?: string;
-  entersound?: string;
+  url?: string | null;
+  videoUrl?: string | null;
+  enterSound?: string | null;
+  entersound?: string | null;
   type?: string;
   artists?: string[];
   duration?: string | number | null;
@@ -87,7 +88,7 @@ export type SoundsByRow = Record<(typeof enterSoundGroups)[number]["label"], Ent
 // ---------- Helpers ----------
 const AUDIO_EXTS = [".mp3", ".m4a", ".wav", ".ogg", ".webm", ".aac", ".flac"];
 const looksLikeAudio = (url: string) => AUDIO_EXTS.some((ext) => url.toLowerCase().includes(ext));
-const getPlayableFromDoc = (s?: SoundDoc | null) => {
+const getPlayableFromDoc = (s?: SoundDoc | null): string | null => {
   if (!s) return null;
   if (s.url && looksLikeAudio(s.url)) return s.url;
   if (s.videoUrl && looksLikeAudio(s.videoUrl)) return s.videoUrl;
@@ -95,7 +96,8 @@ const getPlayableFromDoc = (s?: SoundDoc | null) => {
 };
 
 const useProxy = process.env.NEXT_PUBLIC_USE_AUDIO_PROXY === "1";
-const wrapViaProxy = (u: string | null) => (u && useProxy ? `/api/proxy-audio?src=${encodeURIComponent(u)}` : u);
+const wrapViaProxy = (u: string | null) =>
+  u && useProxy ? `/api/proxy-audio?src=${encodeURIComponent(u)}` : u;
 
 // Mount gate to avoid hydration mismatch for any time-based UI you add
 function useMounted() {
@@ -171,7 +173,9 @@ function SoundTile({
         {cover ? (
           <Image src={cover} alt={display} fill className="object-cover" unoptimized />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No cover</div>
+          <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+            No cover
+          </div>
         )}
       </div>
       <div className="px-2 py-2">
@@ -229,7 +233,8 @@ function HorizontalRow({
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
   };
-  const nudge = (delta: number) => scrollerRef.current?.scrollBy({ left: delta, behavior: "smooth" });
+  const nudge = (delta: number) =>
+    scrollerRef.current?.scrollBy({ left: delta, behavior: "smooth" });
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "ArrowRight") {
@@ -244,7 +249,7 @@ function HorizontalRow({
 
   const handleTileClick = async (it: EnterSoundDoc) => {
     if (title === "Artists") {
-      router.push(`/artist/${it.id}`);
+      await router.push(`/artist/${it.id}`);
       return;
     }
 
@@ -255,10 +260,10 @@ function HorizontalRow({
         const u = getAuth().currentUser;
         if (u) await startAlbumView(it.id, u.uid, []);
       } catch {
-        /* no-op */
+        // ignore
       }
-      const tracks = await fetchTracksForEnterSound(it.id);
-      onDrill("Albums", tracks.length ? tracks : null);
+      const albumTracks = await fetchTracksForEnterSound(it.id);
+      onDrill("Albums", albumTracks.length ? albumTracks : null);
       return;
     }
 
@@ -266,7 +271,7 @@ function HorizontalRow({
       const first = it._soundList?.[0] || null;
       const urlRaw = getPlayableFromDoc(first);
       const url = wrapViaProxy(urlRaw);
-      if (first) {
+      if (first)
         captureTrackMeta({
           soundId: first.id,
           enterSoundId: null,
@@ -274,7 +279,6 @@ function HorizontalRow({
           duration: first.duration ?? null,
           sourceUrl: urlRaw ?? undefined,
         });
-      }
       playAndReveal(url);
       return;
     }
@@ -324,7 +328,7 @@ function HorizontalRow({
         className="scroll-smooth snap-x snap-mandatory overflow-x-auto focus:outline-none"
       >
         <div className="flex flex-nowrap gap-4 pr-2">
-          {items.map((it: EnterSoundDoc) => {
+          {items.map((it) => {
             const cover = it.imageUrl || it.imgUrl;
             const display = it.title || it.id;
             const isAlbum = title.startsWith("Albums");
@@ -344,16 +348,13 @@ function HorizontalRow({
 
             const handleClick = () => {
               if (isAlbum) {
-                // Always drill into album, regardless of audio presence
                 void handleTileClick(it);
                 return;
               }
-
               if (!requiresPlayable) {
                 void handleTileClick(it);
                 return;
               }
-
               if (!playableOK) return;
               const first = it._soundList?.[0] || null;
               const urlRaw = getPlayableFromDoc(first);
@@ -397,18 +398,16 @@ function HorizontalRow({
                         No cover
                       </div>
                     )}
-
                     {isAlbum && (
                       <span
                         className="absolute right-1 top-1 rounded-full bg-black/75 px-2 py-0.5 text-[10px] font-semibold text-white"
-                        aria-label={`${trackCount ?? 0} track${(trackCount ?? 0) === 1 ? "" : "s"}`}
-                        title={`${trackCount ?? 0} track${(trackCount ?? 0) === 1 ? "" : "s"}`}
+                        aria-label={`${trackCount ?? 0} track${trackCount === 1 ? "" : "s"}`}
+                        title={`${trackCount ?? 0} track${trackCount === 1 ? "" : "s"}`}
                       >
                         {trackCount ?? 0}
                       </span>
                     )}
                   </div>
-
                   <div className="px-2 py-2">
                     <p className="truncate text-sm font-medium text-gray-900">{display}</p>
                     {it.type && <p className="truncate text-xs text-gray-500">{it.type}</p>}
@@ -435,8 +434,10 @@ export default function Home() {
   const router = useRouter();
   const mounted = useMounted();
 
-  const [activeSense, setActiveSense] = useState<(typeof SENSES)[number]["key"]>("Sound");
-  const [activeMaster, setActiveMaster] = useState<(typeof MASTER_TABS)[number]>("Adob Sense");
+  const [activeSense, setActiveSense] =
+    useState<(typeof SENSES)[number]["key"]>("Sound");
+  const [activeMaster, setActiveMaster] =
+    useState<(typeof MASTER_TABS)[number]>("Adob Sense");
 
   const [soundsByRow, setSoundsByRow] = useState<Partial<SoundsByRow>>({});
   const [selectedSoundUrl, setSelectedSoundUrl] = useState<string | null>(null);
@@ -456,6 +457,24 @@ export default function Home() {
     sourceUrl?: string;
   } | null>(null);
 
+  // HUD + auth bits
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [playerIsPlaying, setPlayerIsPlaying] = useState(false);
+  const [userDoc, setUserDoc] = useState<{
+    subscriptionType?: string | null;
+    subscriptionEndDate?: string | Date | null;
+    username?: string | null;
+  } | null>(null);
+
+  // HUD album quicklist
+  const [selectedAlbumTracksForHUD, setSelectedAlbumTracksForHUD] = useState<SoundDoc[] | null>(null);
+
+  const handleDrill = (fromRow: string, sounds: SoundDoc[] | null) => {
+    setDrilledFrom(fromRow);
+    setDrilledSounds(sounds);
+    setSelectedAlbumTracksForHUD(sounds ?? null);
+  };
+
   const [searchTerm, setSearchTerm] = useState("");
 
   // player scroll/reveal on autoplay
@@ -466,11 +485,19 @@ export default function Home() {
       playerSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 0);
   };
+  const captureTrackMeta = (meta: {
+    soundId: string;
+    enterSoundId?: string | null;
+    artists?: string[];
+    duration?: string | number | null;
+    sourceUrl?: string;
+  }) => setCurrentSoundMeta(meta);
 
   // auth (keeps your current anonymous flow if user isn't signed in yet)
   useEffect(() => {
     const auth = getAuth();
-    const off = onAuthStateChanged(auth, async (u) => {
+    const off = onAuthStateChanged(auth, async (u: User | null) => {
+      setCurrentUser(u);
       if (!u) {
         try {
           await signInAnonymously(auth);
@@ -479,22 +506,22 @@ export default function Home() {
           console.warn("Anonymous sign-in failed", e);
         }
       }
+      // If you fetch user doc for countdown/subscription, do it here and setUserDoc(...)
     });
     return () => off();
   }, []);
 
-  // Album tracks fetch (testing in soundsII)
+  // Album tracks fetch (testing in soundsII first, fallback to entersound)
   const fetchTracksForEnterSound = async (enterId: string): Promise<SoundDoc[]> => {
     try {
       const q1 = fsQuery(collection(db, "soundsII"), where("enterSound", "==", enterId));
       let snap = await getDocs(q1);
-      let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<SoundDoc, "id">) }));
-      if (docs.length > 0) return docs as SoundDoc[];
-
+      let docs: SoundDoc[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<SoundDoc, "id">) }));
+      if (docs.length > 0) return docs;
       const q2 = fsQuery(collection(db, "soundsII"), where("entersound", "==", enterId));
       snap = await getDocs(q2);
       docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<SoundDoc, "id">) }));
-      return docs as SoundDoc[];
+      return docs;
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn("fetchTracksForEnterSound failed", e);
@@ -511,36 +538,38 @@ export default function Home() {
         try {
           const enterSnap = await getDocs(collection(db, group.id));
           const soundSnap = await getDocs(collection(db, group.soundCollection));
-          const enter = enterSnap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => ({
+
+          const enter: EnterSoundDoc[] = enterSnap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => ({
             id: d.id,
             ...(d.data() as Omit<EnterSoundDoc, "id">),
           }));
-          const sounds = soundSnap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => ({
+
+          const sounds: SoundDoc[] = soundSnap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => ({
             id: d.id,
             ...(d.data() as Omit<SoundDoc, "id">),
           }));
-          const hydrated: EnterSoundDoc[] = (enter as EnterSoundDoc[]).map((es: EnterSoundDoc) => ({
+
+          const hydrated: EnterSoundDoc[] = enter.map((es) => ({
             ...es,
-            _soundList: (sounds as SoundDoc[]).filter(
-              (s: SoundDoc) => (s.enterSound || s.entersound) === es.id
-            ),
+            _soundList: sounds.filter((s) => (s.enterSound || s.entersound) === es.id),
           }));
-          result[group.label as keyof SoundsByRow] = hydrated;
+
+          (result as Partial<SoundsByRow>)[group.label] = hydrated;
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error("Fetch error for group:", group.id, err);
-          result[group.label as keyof SoundsByRow] = [];
+          (result as Partial<SoundsByRow>)[group.label] = [];
         }
       }
       setSoundsByRow(result);
     };
-    fetchAll();
+    void fetchAll();
   }, [activeSense]);
 
   const orderedRows = useMemo(() => {
     const rows = enterSoundGroups.map((g) => ({
       title: g.label,
-      items: (soundsByRow[g.label as keyof SoundsByRow] || []) as EnterSoundDoc[],
+      items: (soundsByRow[g.label] || []) as EnterSoundDoc[],
     }));
     const q = searchTerm.trim().toLowerCase();
     if (!q) return rows;
@@ -559,10 +588,13 @@ export default function Home() {
     console.log("startCheckout:", plan);
   };
 
-  // No userDoc being set here yet; pass nulls for now to HUD
-  const trialEndsAt: Date | null = null;
-  const userName: string | null = null;
-  const subscriptionType: string | null = null;
+  // Convert user subscriptionEndDate (string or Date) to Date for HUD (client-only rendering via dynamic import avoids hydration)
+  const trialEndsAt =
+    userDoc?.subscriptionEndDate
+      ? (typeof userDoc.subscriptionEndDate === "string"
+          ? new Date(userDoc.subscriptionEndDate)
+          : (userDoc.subscriptionEndDate as Date))
+      : null;
 
   return (
     <div className={`${geistSans.variable} ${geistMono.variable} flex min-h-screen flex-col`}>
@@ -577,14 +609,48 @@ export default function Home() {
         onMasterChange={setActiveMaster}
         activeSense={activeSense}
         onSenseChange={setActiveSense}
-        isPlaying={Boolean(selectedSoundUrl)} // lightweight toggle; player has its own state
-        onPlayPause={() => {}}
-        onOpenChat={() => {}}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        onCheckout={(plan: any) => startCheckout(plan)}
-        userName={userName}
-        subscriptionType={subscriptionType}
+        isPlaying={playerIsPlaying}
+        onPlayPause={() => setPlayerIsPlaying((p) => !p)}
+        onOpenChat={() => { /* open chat modal */ }}
+        onCheckout={(plan) => startCheckout(plan)}
+        userName={userDoc?.username ?? null}
+        subscriptionType={userDoc?.subscriptionType ?? null}
         trialEndsAt={trialEndsAt}
+        selectedAlbumTitle={selectedAlbumTitle}
+        selectedAlbumId={selectedAlbumId}
+        selectedAlbumTracks={selectedAlbumTracksForHUD}
+        onPlayTrack={(t) => {
+          const urlRaw = t.url ?? t.videoUrl ?? null;
+          const url = wrapViaProxy(urlRaw);
+          if (!url) return;
+          setCurrentSoundMeta({
+            soundId: t.id,
+            enterSoundId: selectedAlbumId ?? null,
+            artists: t.artists ?? [],
+            duration: typeof t.duration === "number" ? t.duration : null,
+            sourceUrl: urlRaw ?? undefined,
+          });
+          playAndReveal(url);
+          setPlayerIsPlaying(true);
+        }}
+        onSubscribeAlbum={(albumId) => {
+          // TODO: open your subscribe flow for this album
+          // eslint-disable-next-line no-console
+          console.log("subscribe album", albumId);
+        }}
+        onFavoriteTrack={(trackId) => {
+          // TODO: write to a favorites collection
+          // eslint-disable-next-line no-console
+          console.log("favorite track", trackId);
+        }}
+        onShareAlbum={() => {
+          if (navigator.share) {
+            void navigator.share({ title: selectedAlbumTitle ?? "Album", url: window.location.href });
+          } else {
+            void navigator.clipboard.writeText(window.location.href);
+            alert("Link copied!");
+          }
+        }}
       />
 
       {/* Trial banner (top) */}
@@ -595,6 +661,7 @@ export default function Home() {
         {mounted && trialEndsAt && (
           <div className="mt-2 rounded-lg border bg-white p-3 text-sm text-gray-800">
             <div className="font-semibold">Trial time left</div>
+            {/* Optional: wire a countdown here */}
           </div>
         )}
       </div>
@@ -622,16 +689,16 @@ export default function Home() {
         {activeSense === "Sound" && (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
             <div>
-              {orderedRows.map(({ title, items }: { title: string; items: EnterSoundDoc[] }) => (
+              {orderedRows.map(({ title, items }) => (
                 <div key={title}>
                   <HorizontalRow
                     title={title}
                     items={items}
                     onPick={(url) => setSelectedSoundUrl(url)}
                     onDrill={(from, sounds) => {
-                      // Only one album drilldown at a time
                       setDrilledFrom(from);
                       setDrilledSounds(sounds);
+                      setSelectedAlbumTracksForHUD(sounds ?? null);
                     }}
                     router={router}
                     playAndReveal={playAndReveal}
@@ -656,6 +723,7 @@ export default function Home() {
                             setDrilledSounds(null);
                             setSelectedAlbumId(null);
                             setSelectedAlbumTitle(null);
+                            setSelectedAlbumTracksForHUD(null);
                           }}
                           className="text-xs text-gray-500 hover:text-gray-700"
                         >
@@ -676,6 +744,7 @@ export default function Home() {
                                 sourceUrl: url ?? undefined,
                               });
                               playAndReveal(url);
+                              setPlayerIsPlaying(true);
                             }}
                           />
                         ))}
@@ -691,10 +760,11 @@ export default function Home() {
               <div className="rounded-xl border bg-white p-3 shadow">
                 <h3 className="mb-2 text-sm font-semibold">Sponsored</h3>
                 <div className="flex flex-col gap-3">
-                  {(soundsByRow["Ads"] ?? []).slice(0, 4).map((ad) => {
+                  {(soundsByRow["Ads"] || []).slice(0, 4).map((ad) => {
                     const cover = ad.imageUrl || ad.imgUrl;
                     const label = ad.title || ad.id;
-                    const url = ad._soundList?.[0]?.url || ad._soundList?.[0]?.videoUrl || null;
+                    const url =
+                      ad._soundList?.[0]?.url || ad._soundList?.[0]?.videoUrl || null;
                     return (
                       <button
                         key={ad.id}
@@ -724,21 +794,25 @@ export default function Home() {
             <AudioPlayer
               src={selectedSoundUrl}
               onPlayStart={async () => {
+                setPlayerIsPlaying(true);
                 const u = getAuth().currentUser;
-                if (!u || !currentSoundMeta) return;
+                if (!u) return;
                 try {
-                  await startView(currentSoundMeta.soundId, u.uid, currentSoundMeta.artists || []);
+                  await startView(
+                    currentSoundMeta?.soundId || "unknown",
+                    u.uid,
+                    currentSoundMeta?.artists || []
+                  );
                 } catch (e) {
                   // eslint-disable-next-line no-console
                   console.warn("startView failed:", e);
                 }
               }}
-              onFinish={async () => {
+              onFinish={() => {
+                setPlayerIsPlaying(false);
                 setShowRating(true);
               }}
-              onStop={() => {
-                /* hook point if needed */
-              }}
+              onStop={() => setPlayerIsPlaying(false)}
             />
           )}
         </div>
@@ -785,33 +859,27 @@ export default function Home() {
       </nav>
 
       {/* Master nav bar */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-gray-200 bg-white" aria-label="Master navigation">
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-50 border-t border-gray-200 bg-white"
+        aria-label="Master navigation"
+      >
         <div className="mx-auto max-w-6xl px-3">
           <ul className="grid grid-cols-3">
             {MASTER_TABS.map((label) => (
               <li key={label}>
                 <button
+                  onClick={() => setActiveMaster(label)}
                   className={`w-full py-4 text-base font-semibold hover:bg-gray-50 ${
-                    label === "Adob Sense" ? "text-gray-900" : "text-gray-500"
+                    label === activeMaster ? "text-gray-900" : "text-gray-500"
                   }`}
                 >
                   {label}
                 </button>
               </li>
-            ))}ws
+            ))}
           </ul>
         </div>
       </nav>
     </div>
   );
 }
-
-// git checkout main
-
-// git add .
-
-// git commit -m "Fix isAlbum trackCount ordering and disable tiles without playable URL"
-
-// git push origin main
-
-// vercel --prod
